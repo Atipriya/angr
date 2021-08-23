@@ -438,6 +438,12 @@ class SimSegfaultException(SimException, SimMemoryError):
 
 SimSegfaultError = SimSegfaultException
 
+class SimFloatingPointInvalidOperationException(SimException, SimOperationError):
+    pass
+
+class SimFloatingPointZeroDivisionException(SimException, SimOperationError):
+    pass
+
 class SimZeroDivisionException(SimException, SimOperationError):
     pass
 
