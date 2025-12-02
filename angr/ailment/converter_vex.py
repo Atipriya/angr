@@ -91,6 +91,8 @@ class VEXExprConverter(Converter):
     def register(offset, bits, manager):
         reg_size = bits // manager.arch.byte_width
         reg_name = manager.arch.translate_register_name(offset, reg_size)
+        print("reg_name", reg_name)
+
         return Register(
             manager.next_atom(),
             None,
@@ -120,7 +122,107 @@ class VEXExprConverter(Converter):
 
     @staticmethod
     def Get(expr, manager):
-        return VEXExprConverter.register(expr.offset, expr.result_size(manager.tyenv), manager)
+        result = VEXExprConverter.register(expr.offset, expr.result_size(manager.tyenv), manager)
+        # return VEXExprConverter.register(expr.offset, expr.result_size(manager.tyenv), manager)
+
+        print("from Get")
+        print(result)
+        return  result
+
+    @staticmethod
+    def GetI(expr, manager):
+        """Convert VEX GetI to AIL Register with dynamic offset."""
+
+        # Extract fields from GetI
+        base = expr.descr.base
+        num_elems = expr.descr.nElems
+        elem_bits = expr.result_size(manager.tyenv)
+        elem_size = elem_bits // 8
+        ix = VEXExprConverter.convert(expr.ix, manager)
+
+        # DEBUG: Print what we're working with
+        print(f"\n{'=' * 60}")
+        print(f"GetI Conversion")
+        print(f"{'=' * 60}")
+        print(f"Base offset:          {base}")
+        print(f"Number of elements:   {num_elems}")
+        print(f"Element type:         {expr.descr.elemTy}")
+        print(f"Element bits:         {elem_bits}")
+        print(f"Element size (bytes): {elem_size}")
+        print(f"Index variable:       {ix}")
+        print(f"Index bits:           {ix.bits}")
+        print(f"Bias:                 {expr.bias}")
+        # print(f"Endianness:           {expr.end}")
+        print(f"{'=' * 60}\n")
+
+        # Step 1: (ix + bias) % nElems
+        print(f"Step 1: Computing (ix + bias) % nElems")
+        print(f"  ix + bias = t{ix.tmp_idx if hasattr(ix, 'tmp_idx') else '?'} + {expr.bias}")
+
+        mod_expr = BinaryOp(
+            manager.next_atom(), "Mod",
+            [ix + expr.bias, num_elems],
+            False, bits=ix.bits,
+            ins_addr=manager.ins_addr, vex_block_addr=manager.block_addr, vex_stmt_idx=manager.vex_stmt_idx
+        )
+        print(f"  Result: BinaryOp(Mod)")
+        print(f"  This computes: ({ix.tmp_idx if hasattr(ix, 'tmp_idx') else '?'} + {expr.bias}) % {num_elems}\n")
+
+        # Step 2: ((ix + bias) % nElems) * elemSize
+        print(f"Step 2: Computing result * elemSize")
+        print(f"  result * {elem_size} (multiply by element size)")
+
+        elem_size_const = Const(
+            manager.next_atom(), None, elem_size, ix.bits,
+            ins_addr=manager.ins_addr, vex_block_addr=manager.block_addr, vex_stmt_idx=manager.vex_stmt_idx
+        )
+
+        scaled = BinaryOp(
+            manager.next_atom(), "Mul",
+            [mod_expr, elem_size],
+            False, bits=ix.bits,
+            ins_addr=manager.ins_addr, vex_block_addr=manager.block_addr, vex_stmt_idx=manager.vex_stmt_idx
+        )
+        print(f"  Result: BinaryOp(Mul)")
+        print(f"  This computes: (mod_result) * {elem_size}\n")
+
+        # Step 3: base + ((ix + bias) % nElems) * elemSize
+        print(f"Step 3: Computing base + result")
+        print(f"  {base} + scaled")
+
+        offset = BinaryOp(
+            manager.next_atom(), "Add",
+            [base, scaled],
+            False, bits=ix.bits,
+            ins_addr=manager.ins_addr, vex_block_addr=manager.block_addr, vex_stmt_idx=manager.vex_stmt_idx
+        )
+        print(f"  Result: BinaryOp(Add)")
+        print(f"  This computes: {base} + (scaled_result)\n")
+
+        # Final result
+        print(f"Final Formula:")
+        print(
+            f"  offset = {base} + ((({ix.tmp_idx if hasattr(ix, 'tmp_idx') else '?'} + {expr.bias}) % {num_elems}) * {elem_size})\n")
+        # reg_size = elem_bits // manager.arch.byte_width
+        # reg_name = manager.arch.translate_register_name(base, reg_size)
+        # result = Register(
+        #     manager.next_atom(), None, offset,
+        #     elem_bits,
+        #     reg_name=reg_name,
+        #     ins_addr=manager.ins_addr, vex_block_addr=manager.block_addr, vex_stmt_idx=manager.vex_stmt_idx
+        # )
+
+        result = VEXExprConverter.register(offset, elem_bits, manager)
+
+        print(f"Register Created:")
+        # print(f"  Name:  {result.reg_name}")
+        # print(f"  Bits:  {result.bits}")
+        # print(f"  Offset: (dynamic expression)")
+        print(result)
+        print(f"{'=' * 60}\n")
+        # import  ipdb; ipdb.set_trace()
+
+        return result
 
     @staticmethod
     def Load(expr, manager):
@@ -467,6 +569,7 @@ class VEXExprConverter(Converter):
 EXPRESSION_MAPPINGS = {
     pyvex.IRExpr.RdTmp: VEXExprConverter.RdTmp,
     pyvex.IRExpr.Get: VEXExprConverter.Get,
+    pyvex.IRExpr.GetI: VEXExprConverter.GetI,
     pyvex.IRExpr.Unop: VEXExprConverter.Unop,
     pyvex.IRExpr.Binop: VEXExprConverter.Binop,
     pyvex.IRExpr.Triop: VEXExprConverter.Triop,
