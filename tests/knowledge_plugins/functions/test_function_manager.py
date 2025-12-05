@@ -149,6 +149,20 @@ class TestFunctionManager(unittest.TestCase):
         with self.assertRaises(KeyError):
             proj.kb.functions["::bad::read"]  # pylint:disable=pointless-statement
 
+    def test_callsite_with_multiple_targets(self):
+        binary_path = os.path.join(test_location, "x86_64", "df.o")
+        proj = angr.Project(binary_path, auto_load_libs=False)
+
+        cfg = proj.analyses.CFG(normalize=True)
+
+        func = cfg.kb.functions[0x40054B]
+        call_sites = func.get_call_sites()
+        assert sorted(call_sites) == [0x400565, 0x40058F]
+        target0 = func.get_call_target(0x400565)
+        assert target0 == [0x500098]
+        target1 = func.get_call_target(0x40058F)
+        assert target1 == [0x400420, 0x4003CC]
+
 
 if __name__ == "__main__":
     unittest.main()
