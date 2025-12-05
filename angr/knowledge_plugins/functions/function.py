@@ -1298,7 +1298,7 @@ class Function(Serializable):
             return [target for target, _ in self._call_sites[callsite_addr]]
         return None
 
-    def get_call_return(self, callsite_addr):
+    def get_call_return(self, callsite_addr) -> Iterable[int] | None:
         """
         Get the hypothetical return address of a call.
 
@@ -1307,7 +1307,7 @@ class Function(Serializable):
                                     is not a callsite.
         """
         if callsite_addr in self._call_sites:
-            return self._call_sites[callsite_addr][1]
+            return [retn_addr for _, retn_addr in self._call_sites[callsite_addr]]
         return None
 
     @property
