@@ -670,7 +670,6 @@ class TestCallingConventionAnalysis(unittest.TestCase):
         target1 = func.get_call_target(0x40058F)
         assert target1 == [0x400420, 0x4003CC]
 
-
 if __name__ == "__main__":
     # logging.getLogger("angr.analyses.variable_recovery.variable_recovery_fast").setLevel(logging.DEBUG)
     logging.getLogger("angr.analyses.calling_convention").setLevel(logging.INFO)
