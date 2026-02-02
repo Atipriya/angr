@@ -11,7 +11,6 @@ from .arm_cmpf import ARMCmpF
 from .bswap import Bswap
 from .cas_intrinsics import CASIntrinsics
 from .coalesce_same_cascading_ifs import CoalesceSameCascadingIfs
-from .concat_simplifier import ConcatSimplifier
 from .constant_derefs import ConstantDereferences
 from .optimized_div_simplifier import OptimizedDivisionSimplifier
 from .extended_byte_and_mask import ExtendedByteAndMask
@@ -72,7 +71,6 @@ ALL_PEEPHOLE_OPTS: list[Any] = [
     Bswap,
     CASIntrinsics,
     CoalesceSameCascadingIfs,
-    ConcatSimplifier,
     ConstantDereferences,
     OptimizedDivisionSimplifier,
     ExtendedByteAndMask,
