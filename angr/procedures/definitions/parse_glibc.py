@@ -12,6 +12,7 @@ l = logging.getLogger(name="parse_glibc")
 
 
 def main():
+
     with open(sys.argv[1], encoding="utf-8") as f:
         glibc_decls = f.readlines()
 
@@ -20,7 +21,6 @@ def main():
         c_decl = c_decl.strip("\n")
 
         # preprocessing
-        c_decl = c_decl.replace("FILE *", "FILE_t *")
         c_decl = c_decl.replace("const ", "")
         c_decl = c_decl.replace("*restrict ", "* ")
 
