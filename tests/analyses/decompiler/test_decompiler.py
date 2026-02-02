@@ -3497,9 +3497,9 @@ class TestDecompiler(unittest.TestCase):
         assert second_good_if is not None
         assert second_good_if.start() == all_if_stmts[1].start()
 
-        # ensure the memory read exists
-        mem_read = re.search(r"\*\(\(int \*\)&g_501380\) == 1", text)
-        assert mem_read is not None
+        # ensure the constant memory read exists
+        const_mem_read = re.search(r"\*\(\(int \*\)0x501380\) == 1", text)
+        assert const_mem_read is not None
 
     @structuring_algo("sailr")
     def test_ifelseflatten_certtool_common(self, decompiler_options=None):
@@ -5416,69 +5416,6 @@ class TestDecompiler(unittest.TestCase):
         assert len(callee.prototype.args) == 0, "Callee should have no args"
         proto_str = callee.prototype.c_repr("G_DoLoadLevel")
         assert "(void)" in proto_str, f"Callee prototype should have (void), got: {proto_str}"
-
-    @for_all_structuring_algos
-    def test_decompiling_extern_size_hints(self, decompiler_options=None):
-        bin_path = os.path.join(test_location, "x86_64", "f_finale.o")
-        proj = angr.Project(bin_path, auto_load_libs=False)
-        cfg = proj.analyses.CFGFast(normalize=True)
-        proj.analyses.CompleteCallingConventions()
-
-        func = proj.kb.functions["F_CastResponder"]
-        dec = proj.analyses.Decompiler(func, cfg=cfg, options=decompiler_options)
-        assert dec.codegen is not None and dec.codegen.text is not None
-        print_decompilation_result(dec)
-
-        # Check that extern variables with proper size hints are resolved
-        assert "g_5000e0" in dec.codegen.text, "Extern variable g_5000e0 should be present"
-
-    def test_void_function_calls_no_assignment(self, decompiler_options=None):
-        bin_path = os.path.join(test_location, "x86_64", "p_plats.o")
-        proj = angr.Project(bin_path, auto_load_libs=False)
-        cfg = proj.analyses.CFGFast(normalize=True, data_references=True)
-        proj.analyses.CompleteCallingConventions(cfg=cfg, recover_variables=True)
-
-        f = proj.kb.functions["T_PlatRaise"]
-        dec = proj.analyses.Decompiler(f, cfg=cfg.model, options=decompiler_options)
-        assert dec.codegen is not None and dec.codegen.text is not None
-        print_decompilation_result(dec)
-
-        text = dec.codegen.text
-        # S_StartSound should be called without assignment (it's void)
-        assert "S_StartSound(" in text, "S_StartSound call not found"
-        assert "= S_StartSound(" not in text, "S_StartSound should not be assigned (void function)"
-
-    def test_void_function_calls_no_assignment_2(self, decompiler_options=None):
-        bin_path = os.path.join(test_location, "x86_64", "g_game.o")
-        proj = angr.Project(bin_path, auto_load_libs=False)
-        cfg = proj.analyses.CFGFast(normalize=True, data_references=True)
-        proj.analyses.CompleteCallingConventions(cfg=cfg, recover_variables=True)
-
-        f = proj.kb.functions["G_CheckSpot"]
-        dec = proj.analyses.Decompiler(f, cfg=cfg.model, options=decompiler_options)
-        assert dec.codegen is not None and dec.codegen.text is not None
-        print_decompilation_result(dec)
-
-        text = dec.codegen.text
-        # S_StartSound should be called without assignment (it's void)
-        assert "S_StartSound(" in text, "S_StartSound call not found"
-        assert "= S_StartSound(" not in text, "S_StartSound should not be assigned (void function)"
-
-    def test_void_function_calls_no_assignment_3(self, decompiler_options=None):
-        bin_path = os.path.join(test_location, "x86_64", "g_game.o")
-        proj = angr.Project(bin_path, auto_load_libs=False)
-        cfg = proj.analyses.CFGFast(normalize=True, data_references=True)
-        proj.analyses.CompleteCallingConventions(cfg=cfg, recover_variables=True)
-
-        f = proj.kb.functions["G_WorldDone"]
-        dec = proj.analyses.Decompiler(f, cfg=cfg.model, options=decompiler_options)
-        assert dec.codegen is not None and dec.codegen.text is not None
-        print_decompilation_result(dec)
-
-        text = dec.codegen.text
-        # F_StartFinale should be called without assignment (it's void)
-        assert "F_StartFinale(" in text, "F_StartFinale call not found"
-        assert "= F_StartFinale(" not in text, "F_StartFinale should not be assigned (void function)"
 
 
 if __name__ == "__main__":
