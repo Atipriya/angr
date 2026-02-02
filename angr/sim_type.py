@@ -225,9 +225,9 @@ class SimType:
         if "name" in d:
             memo.add(d["name"])
         for field in cls._args:
-            field_key = "q" if field == "qualifier" else field
-            if field_key not in d:
+            if field not in d:
                 continue
+            field_key = "q" if field == "qualifier" else field
             value = d[field_key]
             if isinstance(value, dict):
                 if "_t" in value:
