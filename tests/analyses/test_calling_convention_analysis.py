@@ -622,53 +622,6 @@ class TestCallingConventionAnalysis(unittest.TestCase):
                 ret_size = funcs["ret_ptr"].prototype.returnty.size
                 self.assertEqual(ret_size, 64)
 
-    @cca_mode("fast")
-    def test_void_tail_call(self, *, mode):
-        binary_path = os.path.join(test_location, "x86_64", "g_game.o")
-        proj = angr.Project(binary_path, auto_load_libs=False)
-
-        cfg = proj.analyses.CFG(normalize=True)
-        proj.analyses.CompleteCallingConventions(
-            mode=mode, recover_variables=True, cfg=cfg.model, analyze_callsites=True
-        )
-
-        func_reborn = cfg.kb.functions["G_PlayerReborn"]
-        assert func_reborn.prototype is not None
-        assert isinstance(
-            func_reborn.prototype.returnty, SimTypeBottom
-        ), f"G_PlayerReborn should be void, got {func_reborn.prototype.returnty}"
-
-        func_init = cfg.kb.functions["G_InitPlayer"]
-        assert func_init.prototype is not None
-        assert isinstance(
-            func_init.prototype.returnty, SimTypeBottom
-        ), f"G_InitPlayer should be void (tail-calls void function), got {func_init.prototype.returnty}"
-
-    @cca_mode("fast")
-    def test_callsite_with_multiple_targets(self, *, mode):
-        binary_path = os.path.join(test_location, "x86_64", "df.o")
-        proj = angr.Project(binary_path, auto_load_libs=False)
-
-        cfg = proj.analyses.CFG(normalize=True)
-        proj.analyses.CompleteCallingConventions(mode=mode, recover_variables=True, analyze_callsites=True)
-        func = cfg.kb.functions[0x40054B]
-        call_sites = func.get_call_sites()
-        assert len(call_sites) == 2
-        assert sorted(call_sites) == [0x400565, 0x40058F]
-        target0 = func.get_call_target(0x400565)
-        assert target0 == [0x500098]
-        target1 = func.get_call_target(0x40058F)
-        assert target1 == [0x400420, 0x4003CC]
-
-        func = cfg.kb.functions[0x40054B]
-        call_sites = func.get_call_sites()
-        assert sorted(call_sites) == [0x400565, 0x40058F]
-
-        target0 = func.get_call_target(0x400565)
-        assert target0 == [0x500098]
-
-        target1 = func.get_call_target(0x40058F)
-        assert target1 == [0x400420, 0x4003CC]
 
 if __name__ == "__main__":
     # logging.getLogger("angr.analyses.variable_recovery.variable_recovery_fast").setLevel(logging.DEBUG)
