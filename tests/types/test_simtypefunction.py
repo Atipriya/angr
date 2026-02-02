@@ -14,8 +14,9 @@ class TestSimTypeFunction(unittest.TestCase):
         assert pyproto.c_repr(name="main", full=True) == proto
 
     def test_c_repr_noargs(self):
-        _, pyproto, _ = convert_cproto_to_py("int (main)();")
-        assert pyproto.c_repr(name="main") == "int (main)(void)"
+        proto = "int (main)()"
+        _, pyproto, _ = convert_cproto_to_py(proto + ";")
+        assert pyproto.c_repr(name="main") == proto
 
     def test_c_repr_noname(self):
         _, pyproto, _ = convert_cproto_to_py("int (main)(int argc, char **argv);")
