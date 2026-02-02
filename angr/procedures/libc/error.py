@@ -16,7 +16,7 @@ class error(angr.SimProcedure):
         if status.concrete and self.state.solver.eval(status) != 0:
             self.exit(status)
 
-    def dynamic_returns(self, blocks, **kwargs) -> bool | None:
+    def dynamic_returns(self, blocks, **kwargs) -> bool:
         # Execute those blocks with a blank state, and then dump the arguments
         blank_state = angr.SimState(
             project=self.project,
@@ -51,7 +51,4 @@ class error(angr.SimProcedure):
         )(self.arch)
         ty = angr.sim_type.parse_signature("void x(int, int, char*)").with_arch(self.arch)
         args = cc.get_args(state, ty)
-        # Return None if we can't determine the status
-        if not args[0].concrete:
-            return None
-        return state.solver.eval(args[0]) == 0
+        return bool(args[0].concrete and state.solver.eval(args[0]) == 0)
