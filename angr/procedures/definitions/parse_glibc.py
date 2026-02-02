@@ -19,6 +19,11 @@ def main():
     for c_decl in glibc_decls:
         c_decl = c_decl.strip("\n")
 
+        # preprocessing
+        c_decl = c_decl.replace("FILE *", "FILE_t *")
+        c_decl = c_decl.replace("const ", "")
+        c_decl = c_decl.replace("*restrict ", "* ")
+
         try:
             parsed = parse_file(c_decl, predefined_types=ALL_TYPES)
         except Exception as ex:  # pylint: disable=broad-exception-caught
