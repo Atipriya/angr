@@ -5,7 +5,7 @@ import claripy
 import angr
 from angr import concretization_strategies
 from angr import sim_options as options
-from angr.errors import SimMemoryAddressError, SimMemoryError, SimMergeError, SimUnsatError
+from angr.errors import SimMemoryAddressError, SimMemoryError, SimMergeError, SimUnsatError, SimValueError
 from angr.sim_state_options import SimStateOptions
 from angr.state_plugins.inspect import BP_AFTER, BP_BEFORE
 from angr.storage.memory_mixins.memory_mixin import MemoryMixin
@@ -272,6 +272,32 @@ class AddressConcretizationMixin(MemoryMixin):
 
         if options.AVOID_MULTIVALUED_READS in self.state.options:
             return self._default_value(addr, size, name="symbolic_read_unconstrained", **kwargs)
+
+        # VeriBin (Hongwei): for symbolic / customized addresses, return an uninterpreted
+        # MemoryLoad(addr) instead of concretizing (avoids BackendError; keeps reads consistent).
+        try:
+            # Customized AST (MemoryLoad / Func_...) — never try to concretize it
+            if addr.op == "MemoryLoad" or addr.op.startswith("Func_"):
+                raise SimUnsatError
+            # eval_atleast handles the case where addr is pinned by solver.constraints;
+            # eval_atmost bounds symbolic indirect targets
+            self.state.solver.eval_atleast(addr, 2)
+            self.state.solver.eval_atmost(addr, 32)
+            try:
+                concrete_addrs = self._interleave_ints(sorted(self.concretize_read_addr(addr, condition=condition)))
+            except SimMemoryError:
+                if options.CONSERVATIVE_READ_STRATEGY in self.state.options:
+                    return self._default_value(None, size, name="symbolic_read_unconstrained", **kwargs)
+                raise
+        except SimValueError:
+            # Fall back to a recorded symbolic write, else a fresh MemoryLoad(addr)
+            if hasattr(self.state, "sypy_path"):
+                key = (addr.cache_key, size)
+                if key in self.state.sypy_path.memory_writes:
+                    return self.state.sypy_path.memory_writes[key]
+                args = [addr]
+                MemoryLoad_decl = claripy.ast.func.MemoryLoad(op="MemoryLoad", args=args, _ret_size=size * 8)
+                return MemoryLoad_decl.op(*args)
 
         if (
             not addr.variables.intersection(self.state.solver._solver.variables)
