@@ -157,7 +157,9 @@ class CallSiteMaker(Analysis):
                         callsite_ty.args = tuple(callsite_ty.args) + tuple(variadic_args)
                         arg_locs = cc.arg_locs(callsite_ty)
 
-        if arg_locs is not None and cc is not None:
+        # Hongwei port: a guessed/incomplete prototype can yield arg_locs with
+        # None entries, which blow up in _expand_arglocs below.
+        if arg_locs is not None and None not in arg_locs and cc is not None:
             expanded_arg_locs = self._expand_arglocs(arg_locs)
             for arg_idx, arg_loc in enumerate(expanded_arg_locs):
                 if call_expr.args is not None and arg_idx < len(call_expr.args):
