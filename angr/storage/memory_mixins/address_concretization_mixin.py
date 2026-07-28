@@ -265,7 +265,17 @@ class AddressConcretizationMixin(MemoryMixin):
         # Fast path
         if type(addr) is int:
             return self._load_one_addr(addr, True, addr, condition, size, read_value=None, **kwargs)
-        if not self.state.solver.symbolic(addr):
+        # VeriBin (Hongwei port): MemoryLoad(...) and Func_...() are uninterpreted
+        # stand-ins, not real addresses -- they must never be concretized. This test has
+        # to run BEFORE the solver.symbolic() fast path below, not only inside the try
+        # block further down: a zero-argument Func AST (heavy.py strips the dummy first
+        # arg in place) has an empty .variables, so solver.symbolic() reports False, the
+        # fast path fires, and solver.eval() either raises IndexError in _concrete_value
+        # -- e.args[0] on an empty tuple -- or silently loads from an arbitrary
+        # concretized address. Skipping the fast path routes it to the MemoryLoad
+        # fallback below, which is what the port intended.
+        custom_ast = addr.op == "MemoryLoad" or addr.op.startswith("Func_")
+        if not custom_ast and not self.state.solver.symbolic(addr):
             return self._load_one_addr(
                 self.state.solver.eval(addr), True, addr, condition, size, read_value=None, **kwargs
             )
