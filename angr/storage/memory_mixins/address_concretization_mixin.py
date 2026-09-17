@@ -3,7 +3,13 @@ from __future__ import annotations
 import angr
 from angr import claripy, concretization_strategies
 from angr import sim_options as options
-from angr.errors import SimMemoryAddressError, SimMemoryError, SimMergeError, SimUnsatError
+from angr.errors import (
+    SimMemoryAddressError,
+    SimMemoryError,
+    SimMergeError,
+    SimUnsatError,
+    SimValueError,
+)
 from angr.sim_state_options import SimStateOptions
 from angr.state_plugins.inspect import BP_AFTER, BP_BEFORE
 from angr.storage.memory_mixins.memory_mixin import MemoryMixin
@@ -295,21 +301,46 @@ class AddressConcretizationMixin(MemoryMixin):
         if options.AVOID_MULTIVALUED_READS in self.state.options:
             return self._default_value(addr, size, name="symbolic_read_unconstrained", **kwargs)
 
+        # VeriBin: rather than concretize an address, return an uninterpreted
+        # MemoryLoad(addr), so that two reads of the same address agree and
+        # reads of different addresses do not. Three cases qualify:
+        #
+        #   * a Func_*/MemoryLoad stand-in, which is not an address at all;
+        #   * an address the constraints pin to a single value -- eval_atleast
+        #     finds fewer than two solutions;
+        #   * one loose enough to have more than 32 -- an unresolved indirect
+        #     target, which concretization would have to guess at.
+        #
+        # A recorded write to the same address wins over a fresh load, so a read
+        # after a write returns what was written.
+        #
+        # This has to run BEFORE the CONSERVATIVE_READ_STRATEGY check below,
+        # which VeriBin enables: that check returns a fresh unconstrained value
+        # for any address whose variables are not in the solver, and a
+        # register-derived address usually is not, so it would otherwise shadow
+        # this entirely.
+        if hasattr(self.state, "sypy_path"):
+            try:
+                if _is_uninterpreted_addr(addr):
+                    raise SimUnsatError
+                self.state.solver.eval_atleast(addr, 2)
+                self.state.solver.eval_atmost(addr, 32)
+            except SimValueError:
+                # Keyed exactly as PathPlugin.handle_memory_write records it.
+                # A bare AST would not do: it hashes the same as its cache_key,
+                # so the dict lookup gets that far, but then compares with
+                # Base.__eq__, which builds a symbolic Bool rather than
+                # answering True or False.
+                key = (addr.cache_key, size)
+                if key in self.state.sypy_path.memory_writes:
+                    return self.state.sypy_path.memory_writes[key]
+                return claripy.Uninterpreted("MemoryLoad", [addr], size * 8)
+
         if (
             not addr.variables.intersection(self.state.solver._solver.variables)
             and options.CONSERVATIVE_READ_STRATEGY in self.state.options
         ):
             return self._default_value(addr, size, name="symbolic_read_unconstrained", **kwargs)
-
-        # VeriBin: a Func_*/MemoryLoad address is an uninterpreted stand-in, not
-        # a real address, so it must never be concretized. Return whatever a
-        # matching symbolic write recorded, else a fresh MemoryLoad(addr) so
-        # repeated reads of the same address agree with each other.
-        if hasattr(self.state, "sypy_path") and _is_uninterpreted_addr(addr):
-            key = (addr, size)
-            if key in self.state.sypy_path.memory_writes:
-                return self.state.sypy_path.memory_writes[key]
-            return claripy.Uninterpreted("MemoryLoad", [addr], size * 8)
 
         try:
             concrete_addrs = self._interleave_ints(sorted(self.concretize_read_addr(addr, condition=condition)))
