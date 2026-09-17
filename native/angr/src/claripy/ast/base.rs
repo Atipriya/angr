@@ -362,7 +362,7 @@ impl Base {
     /// Hash that ignores variable names, the order of commutative operands and
     /// the direction of reversible comparisons. VeriBin's cheap pre-filter
     /// before asking z3. See `claripy::veribin`.
-    pub fn canonical_hash(&self) -> u64 {
+    pub fn canonical_hash(&self) -> Result<u64, ClaripyError> {
         veribin::canonical_hash(&self.inner)
     }
 

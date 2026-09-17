@@ -295,7 +295,6 @@ pub fn claripy(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("FSORT_FLOAT", ast::fp::fsort_float())?;
     m.add("FSORT_DOUBLE", ast::fp::fsort_double())?;
 
-    m.add_function(wrap_pyfunction!(veribin::clear_canonical_cache, m)?)?;
     m.add_function(wrap_pyfunction!(py_simplify, m)?)?;
     m.add_function(wrap_pyfunction!(py_replace, m)?)?;
     m.add_function(wrap_pyfunction!(py_excavate_ite, m)?)?;

@@ -8,8 +8,14 @@
 //! with those differences normalized away so two of them can be compared as
 //! strings.
 //!
-//! This is deliberately separate from clarirs' own `canonicalize()`, which angr
-//! depends on and which normalizes something else (variable names only).
+//! Only the policy lives here. The traversal is clarirs' [`walk`] (iterative,
+//! and it caches per node so a shared subexpression is visited once), the
+//! rebuild is clarirs' [`reconstruct_node`], and the memo is clarirs'
+//! [`GenericCache`]. What clarirs has no form for is the VeriBin policy itself:
+//! its op classification, its variable-path hash, and its notion of a canonical
+//! form. clarirs' own `algorithms::canonicalize` is a different algorithm --
+//! it renames variables lexicographically and returns a 3-tuple angr depends
+//! on, with no hash, no operand sorting and no comparison flipping.
 //!
 //! Faithfulness notes -- two quirks of the original are preserved on purpose,
 //! because changing them changes which functions VeriBin calls equivalent:
@@ -27,7 +33,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
-use dashmap::DashMap;
+use clarirs_core::algorithms::reconstruct::reconstruct_node;
+use clarirs_core::algorithms::walk;
+use clarirs_core::cache::GenericCache;
 
 use crate::claripy::prelude::*;
 
@@ -56,7 +64,15 @@ fn is_value_creation(op: &str) -> bool {
 fn is_commutative(op: &str) -> bool {
     matches!(
         op,
-        "__and__" | "__or__" | "__xor__" | "__add__" | "__mul__" | "And" | "Or" | "Xor" | "__eq__"
+        "__and__"
+            | "__or__"
+            | "__xor__"
+            | "__add__"
+            | "__mul__"
+            | "And"
+            | "Or"
+            | "Xor"
+            | "__eq__"
             | "__ne__"
     )
 }
@@ -105,34 +121,39 @@ fn hash_debug<T: std::fmt::Debug>(value: &T) -> u64 {
 /// An argument as the canonicalizer sees it: either a child AST or an opaque
 /// scalar such as an `Extract` bound.
 enum CanonArg {
-    Child(AstRef<'static>),
+    Child,
     Scalar(u64),
 }
 
 /// The node's arguments in the same order and shape `Base.args` exposes them,
-/// with non-AST entries reduced to a hash.
+/// with non-AST entries reduced to a hash and children left as placeholders to
+/// be filled from the traversal's child results.
 ///
 /// The ordering matters: positions become part of the variable paths, and the
 /// scalars become part of the hash, which is what distinguishes `Extract(7, 0,
 /// x)` from `Extract(15, 8, x)`.
 fn canon_args(ast: &AstRef<'static>) -> Vec<CanonArg> {
     match ast.op() {
-        AstOp::ZeroExt(a, amount) | AstOp::SignExt(a, amount) => {
-            vec![CanonArg::Scalar(hash_of(amount)), CanonArg::Child(a.clone())]
+        AstOp::ZeroExt(_, amount) | AstOp::SignExt(_, amount) => {
+            vec![CanonArg::Scalar(hash_of(amount)), CanonArg::Child]
         }
-        AstOp::Extract(a, end, start) => vec![
+        AstOp::Extract(_, end, start) => vec![
             CanonArg::Scalar(hash_of(end)),
             CanonArg::Scalar(hash_of(start)),
-            CanonArg::Child(a.clone()),
+            CanonArg::Child,
         ],
-        AstOp::FpAdd(a, b, rm) | AstOp::FpSub(a, b, rm) | AstOp::FpMul(a, b, rm)
-        | AstOp::FpDiv(a, b, rm) => vec![
-            CanonArg::Child(a.clone()),
-            CanonArg::Child(b.clone()),
-            CanonArg::Scalar(hash_debug(rm)),
-        ],
-        AstOp::FpSqrt(a, rm) => vec![CanonArg::Child(a.clone()), CanonArg::Scalar(hash_debug(rm))],
-        _ => ast.child_iter().map(CanonArg::Child).collect(),
+        AstOp::FpAdd(_, _, rm)
+        | AstOp::FpSub(_, _, rm)
+        | AstOp::FpMul(_, _, rm)
+        | AstOp::FpDiv(_, _, rm) => {
+            vec![
+                CanonArg::Child,
+                CanonArg::Child,
+                CanonArg::Scalar(hash_debug(rm)),
+            ]
+        }
+        AstOp::FpSqrt(_, rm) => vec![CanonArg::Child, CanonArg::Scalar(hash_debug(rm))],
+        _ => ast.child_iter().map(|_| CanonArg::Child).collect(),
     }
 }
 
@@ -169,123 +190,126 @@ struct Canon {
     paths: Vec<(u64, PathCounter)>,
 }
 
-/// Memo, keyed by AST hash. Sound without invalidation because clarirs nodes are
-/// interned and immutable: one hash is always one node.
-static CANON_CACHE: LazyLock<DashMap<u64, Arc<Canon>>> = LazyLock::new(DashMap::new);
+/// Memo for [`canonical`], keyed by AST hash. Sound without invalidation
+/// because clarirs nodes are interned and immutable: one hash is always one
+/// node. `walk` reads and fills it. It is never cleared: VeriBin analyses one
+/// function per process, so the memo dies with the process.
+static CANON_CACHE: LazyLock<GenericCache<u64, Arc<Canon>>> = LazyLock::new(GenericCache::default);
 
-fn canonical(ast: &AstRef<'static>) -> Arc<Canon> {
-    if let Some(hit) = CANON_CACHE.get(&ast.hash()) {
-        return hit.clone();
-    }
+/// One node's canonical form, given its children's. Called by [`walk`] with the
+/// children already done, in `child_iter` order.
+fn canon_node(node: &AstRef<'static>, child_canon: &[Arc<Canon>]) -> Arc<Canon> {
+    let op = node.to_opstring();
 
-    let op = ast.to_opstring();
-    let result = if is_symbol_creation(&op) {
+    if is_symbol_creation(&op) {
         let mut counter = PathCounter::new();
         counter.insert(vec![(op.clone(), Some(0))], 1);
-        Canon {
-            hash: leaf_hash(ast, &op),
-            paths: vec![(ast.hash(), counter)],
-        }
-    } else if is_value_creation(&op) {
-        Canon {
-            hash: leaf_hash(ast, &op),
+        return Arc::new(Canon {
+            hash: leaf_hash(node, &op),
+            paths: vec![(node.hash(), counter)],
+        });
+    }
+    if is_value_creation(&op) {
+        return Arc::new(Canon {
+            hash: leaf_hash(node, &op),
             paths: Vec::new(),
-        }
-    } else {
-        // A reversible comparison is hashed as though it had been written the
-        // other way round, so `a < b` and `b > a` land on the same hash.
-        let reversed = reversed_op(&op);
-        let effective_op = reversed.unwrap_or(&op).to_string();
-        let mut args = canon_args(ast);
-        if reversed.is_some() {
-            args.reverse();
-        }
-        let commutative = is_commutative(&effective_op);
+        });
+    }
 
-        let arg_canon: Vec<Option<Arc<Canon>>> = args
-            .iter()
-            .map(|arg| match arg {
-                CanonArg::Child(child) => Some(canonical(child)),
-                CanonArg::Scalar(_) => None,
-            })
-            .collect();
-        let arg_hashes: Vec<u64> = args
-            .iter()
-            .zip(&arg_canon)
-            .map(|(arg, canon)| match arg {
-                CanonArg::Child(_) => canon.as_ref().expect("child has a canon").hash,
-                CanonArg::Scalar(scalar) => *scalar,
-            })
-            .collect();
+    // Pair each argument position with its child's canonical form, if it has
+    // one, before any reordering.
+    let mut children = child_canon.iter();
+    let mut args: Vec<(u64, Option<Arc<Canon>>)> = canon_args(node)
+        .into_iter()
+        .map(|arg| match arg {
+            CanonArg::Child => {
+                let canon = children.next().expect("one canon per child").clone();
+                (canon.hash, Some(canon))
+            }
+            CanonArg::Scalar(scalar) => (scalar, None),
+        })
+        .collect();
 
-        // Extend every child's paths with the step from here, merging the
-        // children's variables into one ordered map.
-        let mut order: Vec<u64> = Vec::new();
-        let mut paths: HashMap<u64, PathCounter> = HashMap::new();
-        for (index, canon) in arg_canon.iter().enumerate() {
-            let Some(canon) = canon else { continue };
-            let step = (effective_op.clone(), if commutative { None } else { Some(index) });
-            for (var, counter) in &canon.paths {
-                let entry = paths.entry(*var).or_insert_with(|| {
-                    order.push(*var);
-                    PathCounter::new()
-                });
-                for (path, count) in counter {
-                    let mut extended = Vec::with_capacity(path.len() + 1);
-                    extended.push(step.clone());
-                    extended.extend(path.iter().cloned());
-                    *entry.entry(extended).or_insert(0) += count;
-                }
+    // A reversible comparison is hashed as though it had been written the other
+    // way round, so `a < b` and `b > a` land on the same hash.
+    let reversed = reversed_op(&op);
+    let effective_op = reversed.unwrap_or(&op).to_string();
+    if reversed.is_some() {
+        args.reverse();
+    }
+    let commutative = is_commutative(&effective_op);
+
+    // Extend every child's paths with the step from here, merging the
+    // children's variables into one ordered map.
+    let mut order: Vec<u64> = Vec::new();
+    let mut paths: HashMap<u64, PathCounter> = HashMap::new();
+    for (index, (_, canon)) in args.iter().enumerate() {
+        let Some(canon) = canon else { continue };
+        let step = (
+            effective_op.clone(),
+            if commutative { None } else { Some(index) },
+        );
+        for (var, counter) in &canon.paths {
+            let entry = paths.entry(*var).or_insert_with(|| {
+                order.push(*var);
+                PathCounter::new()
+            });
+            for (path, count) in counter {
+                let mut extended = Vec::with_capacity(path.len() + 1);
+                extended.push(step.clone());
+                extended.extend(path.iter().cloned());
+                *entry.entry(extended).or_insert(0) += count;
             }
         }
+    }
 
-        // Sort the operands by content, so a commutative op written either way
-        // round hashes the same. Every operand carries its own hash in its sort
-        // key, so the order is total up to genuinely identical operands.
-        let mut keys: Vec<(usize, (u64, Option<Vec<PathCounter>>))> = args
-            .iter()
-            .zip(&arg_canon)
-            .enumerate()
-            .map(|(index, (arg, canon))| {
-                let key = match arg {
-                    CanonArg::Child(_) => {
-                        let canon = canon.as_ref().expect("child has a canon");
-                        let parent_counters = canon
-                            .paths
-                            .iter()
-                            .map(|(var, _)| paths[var].clone())
-                            .collect();
-                        (arg_hashes[index], Some(parent_counters))
-                    }
-                    CanonArg::Scalar(scalar) => (*scalar, None),
-                };
-                (index, key)
-            })
-            .collect();
-        keys.sort_by(|a, b| a.1.cmp(&b.1));
-        let sorted_hashes: Vec<u64> = keys.iter().map(|(index, _)| arg_hashes[*index]).collect();
+    // Sort the operands by content, so a commutative op written either way round
+    // hashes the same. Every operand carries its own hash in its sort key, so
+    // the order is total up to genuinely identical operands.
+    let mut keys: Vec<(u64, Option<Vec<PathCounter>>)> = args
+        .iter()
+        .map(|(hash, canon)| {
+            let parent_counters = canon
+                .as_ref()
+                .map(|canon| canon.paths.iter().map(|(var, _)| paths[var].clone()).collect());
+            (*hash, parent_counters)
+        })
+        .collect();
+    keys.sort();
+    let sorted_hashes: Vec<u64> = keys.iter().map(|(hash, _)| *hash).collect();
 
-        // The variable paths, stripped of which variable they belong to: that is
-        // what makes the hash blind to variable names but not to how often and
-        // where each distinct variable is used.
-        let mut nameless: Vec<Vec<(Path, u64)>> = order
-            .iter()
-            .map(|var| paths[var].iter().map(|(p, c)| (p.clone(), *c)).collect())
-            .collect();
-        nameless.sort();
+    // The variable paths, stripped of which variable they belong to: that is
+    // what makes the hash blind to variable names but not to how often and
+    // where each distinct variable is used.
+    let mut nameless: Vec<Vec<(Path, u64)>> = order
+        .iter()
+        .map(|var| paths[var].iter().map(|(p, c)| (p.clone(), *c)).collect())
+        .collect();
+    nameless.sort();
 
-        Canon {
-            hash: hash_of(&(sorted_hashes, nameless)),
-            paths: order.into_iter().map(|var| {
+    Arc::new(Canon {
+        hash: hash_of(&(sorted_hashes, nameless)),
+        paths: order
+            .into_iter()
+            .map(|var| {
                 let counter = paths.remove(&var).expect("ordered var is in paths");
                 (var, counter)
-            }).collect(),
-        }
-    };
+            })
+            .collect(),
+    })
+}
 
-    let result = Arc::new(result);
-    CANON_CACHE.insert(ast.hash(), result.clone());
-    result
+fn canonical(ast: &AstRef<'static>) -> Result<Arc<Canon>, ClaripyError> {
+    Ok(walk(
+        ast.clone(),
+        |_| Ok(None),
+        |node, child_canon: &[Arc<Canon>]| Ok(canon_node(&node, child_canon)),
+        &*CANON_CACHE,
+    )?)
+}
+
+pub fn canonical_hash(ast: &AstRef<'static>) -> Result<u64, ClaripyError> {
+    Ok(canonical(ast)?.hash)
 }
 
 // --------------------------------------------------------- canonicalization
@@ -293,29 +317,29 @@ fn canonical(ast: &AstRef<'static>) -> Arc<Canon> {
 /// Rename every symbolic leaf `var_0`, `var_1`, ... in traversal order.
 ///
 /// Numbered per occurrence, not per distinct variable -- see the module notes.
-fn normalize_names(
-    ast: &AstRef<'static>,
-    counter: &mut usize,
-) -> Result<AstRef<'static>, ClaripyError> {
-    if is_symbol_creation(&ast.to_opstring()) {
-        let name = format!("var_{counter}");
-        *counter += 1;
-        return Ok(match ast.op() {
-            AstOp::BVS(_, size) => GLOBAL_CONTEXT.bvs(name, *size)?,
-            AstOp::BoolS(_) => GLOBAL_CONTEXT.bools(name)?,
-            AstOp::FPS(_, sort) => GLOBAL_CONTEXT.fps(name, *sort)?,
-            AstOp::StringS(_) => GLOBAL_CONTEXT.strings(name)?,
-            _ => ast.clone(),
-        });
-    }
-    let children = ast
-        .child_iter()
-        .map(|child| normalize_names(&child, counter))
-        .collect::<Result<Vec<_>, _>>()?;
-    match ast.op().with_children(&children) {
-        Some(op) => Ok(GLOBAL_CONTEXT.make_ast(op)?),
-        None => Ok(ast.clone()),
-    }
+/// That is why this walks uncached (`&()`): a shared subexpression must be
+/// renumbered at each of its occurrences, not reused.
+fn normalize_names(ast: &AstRef<'static>) -> Result<AstRef<'static>, ClaripyError> {
+    let mut counter = 0usize;
+    Ok(walk(
+        ast.clone(),
+        |_| Ok(None),
+        |node, children: &[AstRef<'static>]| {
+            if is_symbol_creation(&node.to_opstring()) {
+                let name = format!("var_{counter}");
+                counter += 1;
+                return match node.op() {
+                    AstOp::BVS(_, size) => GLOBAL_CONTEXT.bvs(name, *size),
+                    AstOp::BoolS(_) => GLOBAL_CONTEXT.bools(name),
+                    AstOp::FPS(_, sort) => GLOBAL_CONTEXT.fps(name, *sort),
+                    AstOp::StringS(_) => GLOBAL_CONTEXT.strings(name),
+                    _ => Ok(node.clone()),
+                };
+            }
+            reconstruct_node(&GLOBAL_CONTEXT, &node, children)
+        },
+        &(),
+    )?)
 }
 
 /// Sort commutative operands, flip reversible comparisons, optionally rename.
@@ -334,17 +358,19 @@ pub fn canonicalize(ast: &AstRef<'static>, rename: bool) -> Result<AstRef<'stati
         if is_commutative(&op) {
             let mut children = new
                 .child_iter()
-                .map(|child| canonicalize(&child, false))
-                .collect::<Result<Vec<_>, _>>()?;
-            children.sort_by_key(|child| canonical(child).hash);
-            if let Some(rebuilt) = new.op().with_children(&children) {
-                new = GLOBAL_CONTEXT.make_ast(rebuilt)?;
-            }
+                .map(|child| {
+                    let child = canonicalize(&child, false)?;
+                    Ok((canonical(&child)?.hash, child))
+                })
+                .collect::<Result<Vec<_>, ClaripyError>>()?;
+            children.sort_by_key(|(hash, _)| *hash);
+            let children: Vec<_> = children.into_iter().map(|(_, child)| child).collect();
+            new = reconstruct_node(&GLOBAL_CONTEXT, &new, &children)?;
         }
     }
 
     if rename {
-        new = normalize_names(&new, &mut 0)?;
+        new = normalize_names(&new)?;
     }
     Ok(new)
 }
@@ -394,10 +420,7 @@ pub fn make_like<'py>(
         .collect();
 
     if op == own_op {
-        return match ast.op().with_children(&children) {
-            Some(rebuilt) => Base::from_ast(py, GLOBAL_CONTEXT.make_ast(rebuilt)?),
-            None => Base::from_ast(py, ast.clone()),
-        };
+        return Base::from_ast(py, reconstruct_node(&GLOBAL_CONTEXT, ast, &children)?);
     }
 
     if reversed_op(&own_op) == Some(op) {
@@ -423,10 +446,6 @@ pub fn make_like<'py>(
     Err(ClaripyError::TypeError(format!(
         "make_like cannot build op {op} from {own_op}"
     )))
-}
-
-pub fn canonical_hash(ast: &AstRef<'static>) -> u64 {
-    canonical(ast).hash
 }
 
 // --------------------------------------------------------------- cache keys
@@ -474,11 +493,4 @@ impl ASTCacheKey {
             Base::from_ast(py, self.inner.clone())?.get().__repr__()
         ))
     }
-}
-
-/// Drop the canonicalization memo. Only useful to bound memory between
-/// functions; the memo never goes stale.
-#[pyfunction]
-pub fn clear_canonical_cache() {
-    CANON_CACHE.clear();
 }
