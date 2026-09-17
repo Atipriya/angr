@@ -1,12 +1,9 @@
 #![allow(non_snake_case)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pyo3::types::PyTuple;
 
 use crate::claripy::prelude::*;
-
-static FPS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[pyclass(
     name = "RM",
@@ -569,7 +566,7 @@ pub fn FPS<'py>(
     sort: PyFSort,
     explicit_name: bool,
 ) -> Result<Bound<'py, FP>, ClaripyError> {
-    let mut name: String = name.into();
+    let name: String = name.into();
     if !explicit_name {
         // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
         // process and the counter is global with no reset between them, so the
@@ -577,7 +574,6 @@ pub fn FPS<'py>(
         // identical constraints would never compare equal. Mirrors the claripy
         // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
         // within a side too.
-        let _ = &FPS_COUNTER;
     }
     FP::new_with_name(py, &GLOBAL_CONTEXT.fps(&name, sort)?, Some(name))
 }

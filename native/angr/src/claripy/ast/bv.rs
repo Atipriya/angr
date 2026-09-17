@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
 use std::iter::once;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::Euclid;
@@ -12,8 +11,6 @@ use crate::claripy::ast::fp::{PyFSort, PyRM};
 use crate::claripy::ast::{and, not, or, xor};
 use crate::claripy::prelude::*;
 use crate::claripy::pyslicemethodsext::PySliceMethodsExt;
-
-static BVS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[pyclass(extends=Bits, subclass, frozen, weakref, module="angr.rustylib.claripy.ast.bv")]
 pub struct BV {
@@ -1085,7 +1082,6 @@ pub fn BVS(
         // identical constraints would never compare equal. Mirrors the claripy
         // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
         // within a side too.
-        let _ = &BVS_COUNTER;
         name = format!("{name}_{size}");
     }
     BV::new_with_name(py, &GLOBAL_CONTEXT.bvs(&name, size)?, Some(name))

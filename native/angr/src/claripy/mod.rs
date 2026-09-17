@@ -11,6 +11,7 @@ pub mod prelude;
 pub mod py_err;
 pub mod pyslicemethodsext;
 pub mod solver;
+pub mod veribin;
 pub mod vsa;
 
 use num_bigint::BigInt;
@@ -242,6 +243,7 @@ pub fn claripy(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     );
 
     m.add_class::<ast::base::Base>()?;
+    m.add_class::<veribin::ASTCacheKey>()?;
     m.add_class::<ast::bits::Bits>()?;
     m.add_class::<ast::bool::Bool>()?;
     m.add_class::<ast::bv::BV>()?;
@@ -293,6 +295,7 @@ pub fn claripy(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("FSORT_FLOAT", ast::fp::fsort_float())?;
     m.add("FSORT_DOUBLE", ast::fp::fsort_double())?;
 
+    m.add_function(wrap_pyfunction!(veribin::clear_canonical_cache, m)?)?;
     m.add_function(wrap_pyfunction!(py_simplify, m)?)?;
     m.add_function(wrap_pyfunction!(py_replace, m)?)?;
     m.add_function(wrap_pyfunction!(py_excavate_ite, m)?)?;

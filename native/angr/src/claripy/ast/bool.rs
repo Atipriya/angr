@@ -1,7 +1,5 @@
 #![allow(non_snake_case)]
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyDict;
@@ -11,8 +9,6 @@ use crate::claripy::ast::{and, not, or, xor};
 use crate::claripy::prelude::*;
 
 use super::r#if;
-
-static BOOLS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[pyclass(extends=Base, subclass, frozen, weakref, module="angr.rustylib.claripy.ast.bool")]
 pub struct Bool {
@@ -287,7 +283,7 @@ pub fn BoolS<'py>(
     name: NameString,
     explicit_name: bool,
 ) -> Result<Bound<'py, Bool>, ClaripyError> {
-    let mut name: String = name.into();
+    let name: String = name.into();
     if !explicit_name {
         // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
         // process and the counter is global with no reset between them, so the
@@ -295,7 +291,6 @@ pub fn BoolS<'py>(
         // identical constraints would never compare equal. Mirrors the claripy
         // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
         // within a side too.
-        let _ = &BOOLS_COUNTER;
     }
     Bool::new_with_name(py, &GLOBAL_CONTEXT.bools(&name)?, Some(name.clone()))
 }

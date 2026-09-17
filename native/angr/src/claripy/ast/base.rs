@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use clarirs_core::algorithms::{collect_vars::collect_vars, structurally_match};
 use clarirs_vsa::cardinality::Cardinality;
@@ -8,6 +8,7 @@ use pyo3::types::{PyDict, PyFrozenSet, PyTuple, PyType};
 
 use crate::claripy::ast::repr;
 use crate::claripy::prelude::*;
+use crate::claripy::veribin;
 
 type Reduced<'py> = (
     Bound<'py, PyType>,
@@ -309,6 +310,87 @@ impl Base {
             Some(op) => Base::from_ast(py, GLOBAL_CONTEXT.make_ast(op)?),
             None => Base::from_ast(py, self.inner.clone()),
         }
+    }
+
+    /// Each distinct leaf AST, once.
+    ///
+    /// Restores claripy's `Base.leaf_asts`, which upstream removed. Dedup is by
+    /// structural hash, so a subexpression shared many times is yielded once.
+    pub fn leaf_asts<'py>(&self, py: Python<'py>) -> Result<Vec<Bound<'py, Base>>, ClaripyError> {
+        let mut seen: HashSet<u64> = HashSet::new();
+        let mut stack = vec![self.inner.clone()];
+        let mut out = Vec::new();
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node.hash()) {
+                continue;
+            }
+            if node.depth() == 1 {
+                out.push(Base::from_ast(py, node)?);
+            } else {
+                stack.extend(node.child_iter());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every descendant AST, leaves included.
+    ///
+    /// Restores claripy's `Base.children_asts`. Not deduplicated, matching the
+    /// original: a shared subexpression appears once per edge into it.
+    pub fn children_asts<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Result<Vec<Bound<'py, Base>>, ClaripyError> {
+        let mut stack: Vec<_> = self.inner.child_iter().collect();
+        let mut out = Vec::new();
+        while let Some(node) = stack.pop() {
+            out.push(Base::from_ast(py, node.clone())?);
+            stack.extend(node.child_iter());
+        }
+        Ok(out)
+    }
+
+    /// Hashable handle for this AST, as claripy's `cache_key` returned.
+    ///
+    /// The node itself is already a sound dict key here, but VeriBin stores
+    /// cache keys and reads the AST back off them as `key.ast`.
+    #[getter]
+    pub fn cache_key(&self) -> veribin::ASTCacheKey {
+        veribin::ASTCacheKey::new(self.inner.clone())
+    }
+
+    /// Hash that ignores variable names, the order of commutative operands and
+    /// the direction of reversible comparisons. VeriBin's cheap pre-filter
+    /// before asking z3. See `claripy::veribin`.
+    pub fn canonical_hash(&self) -> u64 {
+        veribin::canonical_hash(&self.inner)
+    }
+
+    /// Sort commutative operands, flip reversible comparisons, and (by default)
+    /// rename symbolic leaves, so two ASTs that differ only in those ways
+    /// compare equal as strings.
+    ///
+    /// Distinct from `canonicalize`, which angr uses and which returns a
+    /// 3-tuple and normalizes variable names only.
+    #[pyo3(signature = (rename=true))]
+    pub fn canonicalize_veribin<'py>(
+        &self,
+        py: Python<'py>,
+        rename: bool,
+    ) -> Result<Bound<'py, Base>, ClaripyError> {
+        Base::from_ast(py, veribin::canonicalize(&self.inner, rename)?)
+    }
+
+    /// Rebuild this node as `op` over `args`, restoring claripy's `make_like`.
+    /// Handles leaf renames, same-op rebuilds and reversible-comparison flips;
+    /// anything else raises.
+    pub fn make_like<'py>(
+        &self,
+        py: Python<'py>,
+        op: &str,
+        args: Vec<Bound<'py, PyAny>>,
+    ) -> Result<Bound<'py, Base>, ClaripyError> {
+        veribin::make_like(py, &self.inner, op, args)
     }
 
     #[pyo3(signature = (respect_annotations=true))]

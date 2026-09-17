@@ -1,10 +1,7 @@
 #![allow(non_snake_case)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::claripy::prelude::*;
-
-static STRINGS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[pyclass(name="String", extends=Base, subclass, frozen, module="angr.rustylib.claripy.ast.strings")]
 pub struct PyAstString {
@@ -126,7 +123,7 @@ pub fn StringS<'py>(
     name: NameString,
     explicit_name: bool,
 ) -> Result<Bound<'py, PyAstString>, ClaripyError> {
-    let mut name: String = name.into();
+    let name: String = name.into();
     if !explicit_name {
         // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
         // process and the counter is global with no reset between them, so the
@@ -134,7 +131,6 @@ pub fn StringS<'py>(
         // identical constraints would never compare equal. Mirrors the claripy
         // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
         // within a side too.
-        let _ = &STRINGS_COUNTER;
     }
     PyAstString::new_with_name(py, &GLOBAL_CONTEXT.strings(&name)?, Some(name))
 }
