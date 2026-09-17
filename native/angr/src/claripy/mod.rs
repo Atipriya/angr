@@ -172,6 +172,7 @@ pub fn claripy(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         ast::bv::RotateLeft,
         ast::bv::RotateRight,
         ast::bv::Concat,
+        ast::bv::Uninterpreted,
         ast::bv::Extract,
         ast::bv::ZeroExt,
         ast::bv::SignExt,

@@ -1079,8 +1079,14 @@ pub fn BVS(
 ) -> Result<Bound<'_, BV>, ClaripyError> {
     let mut name: String = name.into();
     if !explicit_name {
-        let counter = BVS_COUNTER.fetch_add(1, Ordering::Relaxed);
-        name = format!("{name}_{counter}_{size}");
+        // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
+        // process and the counter is global with no reset between them, so the
+        // same register would be named differently on each side and textually
+        // identical constraints would never compare equal. Mirrors the claripy
+        // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
+        // within a side too.
+        let _ = &BVS_COUNTER;
+        name = format!("{name}_{size}");
     }
     BV::new_with_name(py, &GLOBAL_CONTEXT.bvs(&name, size)?, Some(name))
 }
@@ -1214,6 +1220,20 @@ pub fn Concat<'py>(
     let inner_args: Vec<_> = unpacked.iter().map(|b| b.get().inner.clone()).collect();
     let result = GLOBAL_CONTEXT.concat(inner_args)?;
     BV::new(py, &result.simplify_ext(true, true)?)
+}
+
+/// An uninterpreted function application. `name` is taken verbatim -- no
+/// uniquifying counter -- because it identifies the function, not a variable.
+/// Deliberately not simplified: the node must survive exactly as constructed.
+#[pyfunction(signature = (name, args, width))]
+pub fn Uninterpreted<'py>(
+    py: Python<'py>,
+    name: String,
+    args: Vec<Bound<'py, BV>>,
+    width: u32,
+) -> Result<Bound<'py, BV>, ClaripyError> {
+    let inner_args: Vec<_> = args.iter().map(|b| b.get().inner.clone()).collect();
+    BV::new(py, &GLOBAL_CONTEXT.uninterpreted(&name, inner_args, width)?)
 }
 
 #[pyfunction]
@@ -1431,6 +1451,7 @@ pub(crate) fn import(_: Python, m: &Bound<PyModule>) -> PyResult<()> {
         RotateLeft,
         RotateRight,
         Concat,
+        Uninterpreted,
         Extract,
         ZeroExt,
         SignExt,

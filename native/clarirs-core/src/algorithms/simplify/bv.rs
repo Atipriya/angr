@@ -1542,6 +1542,14 @@ pub(crate) fn simplify_bv<'c>(
             }
             Ok(ctx.widen(lhs, rhs)?)
         }
+        // Deliberately inert: simplify the arguments, never rewrite the
+        // application. This simplifier is shared with angr's own symbolic
+        // execution, so any rewrite rule added here would change angr
+        // everywhere, not just VeriBin. Interning already gives congruence.
+        AstOp::Uninterpreted(name, _, width) => {
+            let args = state.get_all_simplified()?;
+            Ok(ctx.uninterpreted(name.as_str(), args, *width)?)
+        }
         _ => unreachable!("non-bitvector op dispatched to simplify_bv"),
     }
 }

@@ -30,6 +30,38 @@ fn smtlib_symbol(name: &str) -> String {
     }
 }
 
+/// Compact, symbol-safe tag for an AST's sort, used to build UF symbol names.
+fn sort_tag(ast: &AstRef<'_>) -> String {
+    match ast.ast_type() {
+        AstType::Bool => "b".to_string(),
+        AstType::BitVec(width) => format!("bv{width}"),
+        AstType::Float(sort) => format!("fp{}.{}", sort.exponent, sort.mantissa),
+        AstType::String => "str".to_string(),
+    }
+}
+
+/// SMT-LIB symbol for an uninterpreted application, with its signature encoded.
+///
+/// SMT-LIB permits one declaration per name. z3's API -- which pre-clarirs
+/// claripy used via `z3.Function(name, *sig)` -- instead treats each distinct
+/// signature as its own declaration that merely shares a display name, and
+/// shares no congruence between them. VeriBin depends on that: it truncates
+/// argument lists, so one callee legitimately appears at several arities.
+/// Encoding the signature keeps those separate, matching the old behaviour;
+/// applications that agree on the signature still collapse to one symbol, so
+/// congruence within a signature is preserved. The name stays a prefix, so
+/// `startswith("Func_")` checks keep working.
+fn smtlib_uf_symbol(name: &str, args: &[AstRef<'_>], width: u32) -> String {
+    let mut symbol = String::from(name);
+    symbol.push('!');
+    for arg in args {
+        symbol.push_str(&sort_tag(arg));
+        symbol.push('_');
+    }
+    symbol.push_str(&format!("to_bv{width}"));
+    smtlib_symbol(&symbol)
+}
+
 /// Renders a single node to SMT-LIB given its already-rendered children. A
 /// single match over the unified op enum replaces the previous per-sort
 /// functions.
@@ -228,6 +260,17 @@ fn to_smtlib_op(ast: &AstRef<'_>, children: &[String]) -> String {
             children[0], children[1], children[2]
         ),
         AstOp::BVToStr(..) => format!("(str.from_bv {})", children[0]),
+
+        // Uninterpreted application. Zero-arity renders as the bare symbol, to
+        // match its `(declare-fun f () S)` declaration.
+        AstOp::Uninterpreted(name, args, width) => {
+            let symbol = smtlib_uf_symbol(name.as_str(), args, *width);
+            if children.is_empty() {
+                symbol
+            } else {
+                format!("({} {})", symbol, children.join(" "))
+            }
+        }
     }
 }
 
@@ -283,6 +326,50 @@ fn var_declaration(ast: &AstRef<'_>) -> Option<(String, String)> {
     }
 }
 
+/// SMT-LIB sort string for any AST, using the same spellings as
+/// [`var_declaration`].
+fn smtlib_sort(ast: &AstRef<'_>) -> String {
+    match ast.ast_type() {
+        AstType::Bool => "Bool".to_string(),
+        AstType::BitVec(width) => format!("(_ BitVec {width})"),
+        AstType::Float(sort) => {
+            format!("(_ FloatingPoint {} {})", sort.exponent, sort.mantissa + 1)
+        }
+        AstType::String => "String".to_string(),
+    }
+}
+
+/// Collects `name -> "(argsorts) retsort"` for every uninterpreted function
+/// applied anywhere in `ast`.
+///
+/// These are emitted by [`to_smtlib_op`] but are not variables, so
+/// `collect_vars` never yields them; without this they would be referenced in
+/// the benchmark while undeclared, and the script would fail to parse.
+#[allow(clippy::mutable_key_type)]
+fn collect_uninterpreted<'c>(
+    ast: &AstRef<'c>,
+    out: &mut std::collections::BTreeMap<String, String>,
+) {
+    let mut seen: std::collections::HashSet<AstRef<'c>> = std::collections::HashSet::new();
+    let mut stack = vec![ast.clone()];
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        if let AstOp::Uninterpreted(name, args, width) = node.op() {
+            let sorts: Vec<String> = args.iter().map(smtlib_sort).collect();
+            // Keyed by the signature-encoded symbol, so one callee applied at
+            // several signatures yields one declaration each rather than
+            // overwriting itself and leaving applications undeclared.
+            out.insert(
+                smtlib_uf_symbol(name.as_str(), args, *width),
+                format!("({}) (_ BitVec {width})", sorts.join(" ")),
+            );
+        }
+        stack.extend(node.child_iter());
+    }
+}
+
 /// Renders a full SMT-LIB 2 benchmark for a set of assertions: a two-line
 /// header, one `(declare-fun ...)` per distinct free variable, one
 /// `(assert ...)` per constraint, and a trailing `(check-sat)`.
@@ -297,17 +384,22 @@ pub fn constraints_to_smtlib(constraints: &[AstRef<'_>]) -> Result<String, Clari
     // Declare each variable once, even when shared across constraints. BTreeMap
     // keeps declarations in a stable (name-sorted) order.
     let mut decls: BTreeMap<String, String> = BTreeMap::new();
+    let mut fdecls: BTreeMap<String, String> = BTreeMap::new();
     for constraint in constraints {
         for var in collect_vars(constraint)? {
             if let Some((name, sort)) = var_declaration(&var) {
                 decls.insert(name, sort);
             }
         }
+        collect_uninterpreted(constraint, &mut fdecls);
     }
 
     let mut out = String::from("; benchmark generated from clarirs\n(set-info :status unknown)\n");
     for (name, sort) in &decls {
         out.push_str(&format!("(declare-fun {name} () {sort})\n"));
+    }
+    for (name, sig) in &fdecls {
+        out.push_str(&format!("(declare-fun {name} {sig})\n"));
     }
     for constraint in constraints {
         out.push_str(&format!("(assert {})\n", constraint.to_smtlib()));

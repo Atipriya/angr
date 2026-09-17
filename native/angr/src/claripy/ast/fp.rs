@@ -571,8 +571,13 @@ pub fn FPS<'py>(
 ) -> Result<Bound<'py, FP>, ClaripyError> {
     let mut name: String = name.into();
     if !explicit_name {
-        let counter = FPS_COUNTER.fetch_add(1, Ordering::Relaxed);
-        name = format!("{name}_{counter}");
+        // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
+        // process and the counter is global with no reset between them, so the
+        // same register would be named differently on each side and textually
+        // identical constraints would never compare equal. Mirrors the claripy
+        // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
+        // within a side too.
+        let _ = &FPS_COUNTER;
     }
     FP::new_with_name(py, &GLOBAL_CONTEXT.fps(&name, sort)?, Some(name))
 }

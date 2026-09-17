@@ -106,6 +106,14 @@ pub enum AstOp<'c> {
     StrIndexOf(AstRef<'c>, AstRef<'c>, AstRef<'c>),
     StrToBV(AstRef<'c>),
 
+    /// An uninterpreted function application: a named function symbol applied to
+    /// `args`, producing a bitvector of the given width. Opaque to the solver
+    /// except for congruence -- equal arguments give equal results. VeriBin uses
+    /// these for call results (`Func_<name>`) and for memory reads whose address
+    /// cannot be concretized (`MemoryLoad`). Always symbolic: a zero-argument
+    /// application has no variables but is still not a known value.
+    Uninterpreted(InternedString, Vec<AstRef<'c>>, u32),
+
     // VSA bitvector operations (always symbolic)
     Union(AstRef<'c>, AstRef<'c>),
     Intersection(AstRef<'c>, AstRef<'c>),
@@ -148,6 +156,7 @@ macro_rules! ast_op_arity {
     (
         leaf: [$($leaf:ident),* $(,)?],
         nary: [$($nary:ident),* $(,)?],
+        nary_named: [$($nn:ident),* $(,)?],
         unary: [$($un:ident $(($($unp:ident),*))?),* $(,)?],
         binary: [$($bin:ident $(($($binp:ident),*))?),* $(,)?],
         ternary: [$($ter:ident),* $(,)?] $(,)?
@@ -159,6 +168,8 @@ macro_rules! ast_op_arity {
                     $(AstOp::$leaf(..))|* => None,
                     // N-ary operations index directly into their Vec (O(1))
                     $(AstOp::$nary(v))|* => v.get(index).cloned(),
+                    // Named n-ary: (name, children, width)
+                    $(AstOp::$nn(_, v, ..))|* => v.get(index).cloned(),
                     $(AstOp::$un(a, ..))|* => (index == 0).then(|| a.clone()),
                     $(AstOp::$bin(a, b, ..))|* => match index {
                         0 => Some(a.clone()),
@@ -179,6 +190,7 @@ macro_rules! ast_op_arity {
                 match self {
                     $(AstOp::$leaf(..))|* => 0,
                     $(AstOp::$nary(v))|* => v.len(),
+                    $(AstOp::$nn(_, v, ..))|* => v.len(),
                     $(AstOp::$un(..))|* => 1,
                     $(AstOp::$bin(..))|* => 2,
                     $(AstOp::$ter(..))|* => 3,
@@ -192,6 +204,8 @@ macro_rules! ast_op_arity {
                 Some(match self {
                     $(AstOp::$leaf(..))|* => return None,
                     $(AstOp::$nary(..) => AstOp::$nary(children.to_vec()),)*
+                    // InternedString is Arc<str> and not Copy, so clone rather than deref.
+                    $(AstOp::$nn(name, _, w) => AstOp::$nn(name.clone(), children.to_vec(), *w),)*
                     $(AstOp::$un(_ $($(, $unp)*)?) => AstOp::$un(c(0) $($(, *$unp)*)?),)*
                     $(AstOp::$bin(_, _ $($(, $binp)*)?) => AstOp::$bin(c(0), c(1) $($(, *$binp)*)?),)*
                     $(AstOp::$ter(..) => AstOp::$ter(c(0), c(1), c(2)),)*
@@ -204,6 +218,7 @@ macro_rules! ast_op_arity {
 ast_op_arity! {
     leaf: [BoolS, BoolV, BVS, BVV, FPS, FPV, StringS, StringV],
     nary: [And, Or, Xor, Add, Mul, Concat],
+    nary_named: [Uninterpreted],
     unary: [
         Not, Neg, ByteReverse, ZeroExt(n), SignExt(n), Extract(hi, lo), StrLen, StrToBV,
         FpToIEEEBV, FpToUBV(size, rm), FpToSBV(size, rm), FpNeg, FpAbs, FpSqrt(rm),
@@ -235,10 +250,16 @@ impl<'c> AstOp<'c> {
     /// Returns true if the op is inherently symbolic regardless of whether it
     /// has variables. VSA operations (Union, Intersection, Widen) are always
     /// symbolic because they represent abstract multi-valued results.
+    /// Uninterpreted is symbolic for the same reason, and must be: a
+    /// zero-argument application has no variables, so without this a caller
+    /// would treat it as a concrete value and try to evaluate it.
     pub fn is_inherently_symbolic(&self) -> bool {
         matches!(
             self,
-            AstOp::Union(..) | AstOp::Intersection(..) | AstOp::Widen(..)
+            AstOp::Union(..)
+                | AstOp::Intersection(..)
+                | AstOp::Widen(..)
+                | AstOp::Uninterpreted(..)
         )
     }
 
@@ -322,6 +343,7 @@ impl<'c> AstOp<'c> {
             AstOp::FpToIEEEBV(a) => AstType::BitVec(a.size()),
             AstOp::FpToUBV(_, size, _) | AstOp::FpToSBV(_, size, _) => AstType::BitVec(*size),
             AstOp::StrLen(_) | AstOp::StrToBV(_) | AstOp::StrIndexOf(..) => AstType::BitVec(64),
+            AstOp::Uninterpreted(_, _, width) => AstType::BitVec(*width),
 
             // Floats
             AstOp::FPS(_, sort) => AstType::Float(*sort),
@@ -549,6 +571,13 @@ impl<'c> AstOp<'c> {
             AstOp::FpFP(s, e, m) => require(
                 s.ast_type().is_bitvec() && e.ast_type().is_bitvec() && m.ast_type().is_bitvec(),
                 "FpFP requires bitvector operands",
+            ),
+
+            // Zero arguments is legal: a call whose arguments were not recorded
+            // still produces an opaque result.
+            AstOp::Uninterpreted(_, args, _) => require(
+                args.iter().all(|a| a.ast_type().is_bitvec()),
+                "Uninterpreted requires bitvector arguments",
             ),
         }
     }

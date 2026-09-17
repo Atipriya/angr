@@ -193,9 +193,40 @@ class HeavyVEXMixin(SuccessorsEngine, ClaripyDataMixin, SimStateStorageMixin, VE
             exit_jumpkind = exit_state.history.jumpkind or ""
 
             if o.CALLLESS in self.state.options and exit_jumpkind == "Ijk_Call":
-                exit_state.registers.store(
-                    exit_state.arch.ret_offset, exit_state.solver.Unconstrained("fake_ret_value", exit_state.arch.bits)
-                )
+                # VeriBin: with the sypy_path plugin present, a skipped call
+                # returns an uninterpreted Func_<name>(args) rather than a fresh
+                # unconstrained value, so two calls with the same arguments
+                # agree and calls with different arguments do not.
+                if hasattr(exit_state, "sypy_path"):
+                    try:
+                        target_func_call_addr = exit_state.addr
+                        call_insn_addr = list(exit_state.history.bbl_addrs)[-1]
+                        # function_info: {func_call_addr: {'func_name': ..., 'func_obj': ...}}
+                        assert target_func_call_addr in exit_state.sypy_path.function_info
+                        target_func_name = exit_state.sypy_path.function_info[target_func_call_addr]["func_name"]
+                    except Exception:
+                        # Indirect call: name it after the (symbolic) target.
+                        target_func_name = "Func_indirect_call" + str(exit_state.ip)
+                        call_insn_addr = list(exit_state.history.bbl_addrs)[-1]
+
+                        # Ensure the instruction after the indirect call still runs.
+                        if exit_state in successors.unconstrained_successors:
+                            successors.unconstrained_successors.remove(exit_state)
+                            successors.flat_successors.append(exit_state)
+
+                    # function_calls: {func_name: {call_insn_addr: [[args], ...]}}; take the last arg-list
+                    assert call_insn_addr in exit_state.sypy_path.function_calls[target_func_name]
+                    target_func_args = exit_state.sypy_path.function_calls[target_func_name][call_insn_addr][-1]
+
+                    exit_state.registers.store(
+                        exit_state.arch.ret_offset,
+                        claripy.Uninterpreted(target_func_name, target_func_args, exit_state.arch.bits),
+                    )
+                else:
+                    exit_state.registers.store(
+                        exit_state.arch.ret_offset,
+                        exit_state.solver.Unconstrained("fake_ret_value", exit_state.arch.bits),
+                    )
                 exit_state.scratch.target = claripy.BVV(successors.addr + irsb.size, exit_state.arch.bits)
                 exit_state.history.jumpkind = "Ijk_FakeRet"
                 exit_state.regs.ip = exit_state.scratch.target

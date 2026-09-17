@@ -109,6 +109,13 @@ pub(crate) fn reduce_bv(
         AstOp::Union(..) => child_si(children, 0)?.union(&child_si(children, 1)?),
         AstOp::Intersection(..) => child_si(children, 0)?.intersection(&child_si(children, 1)?),
         AstOp::Widen(..) => child_si(children, 0)?.widen(&child_si(children, 1)?),
+        // An opaque application has no abstract value. Report it the way the
+        // other unsupported ops above do -- a recoverable error, not a panic.
+        AstOp::Uninterpreted(..) => {
+            return Err(ClarirsError::UnsupportedOperation(
+                "Uninterpreted functions are not supported by VSA".to_string(),
+            ));
+        }
         _ => unreachable!("non-bitvector op dispatched to reduce_bv"),
     })
 }

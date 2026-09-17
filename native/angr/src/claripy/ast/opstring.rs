@@ -115,6 +115,11 @@ impl ToOpString for AstRef<'static> {
             AstOp::StrSubstr(..) => "StrSubstr".to_string(),
             AstOp::StrReplace(..) => "StrReplace".to_string(),
             AstOp::BVToStr(..) => "IntToStr".to_string(),
+
+            // The op string IS the function name, as in pre-clarirs claripy,
+            // where an uninterpreted application's op was literally "Func_<f>"
+            // or "MemoryLoad". VeriBin discriminates on exactly those strings.
+            AstOp::Uninterpreted(name, ..) => name.to_string(),
         }
     }
 }

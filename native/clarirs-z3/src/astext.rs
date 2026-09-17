@@ -523,6 +523,36 @@ impl<'c> AstExtZ3<'c> for AstRef<'c> {
                                 let int_val = mk_bv2int(child(children, 0)?)?;
                                 RcAst::try_from(Z3_mk_int_to_str(z3_ctx, *int_val))?
                             }
+
+                            // Uninterpreted application. Z3 interns func_decls
+                            // by name and signature, so every application of
+                            // the same symbol shares one declaration and Z3's
+                            // congruence closure gives equal results for equal
+                            // arguments -- which is the whole point of the op.
+                            AstOp::Uninterpreted(name, _, width) => {
+                                let name_cstr = std::ffi::CString::new(name.as_str()).unwrap();
+                                let sym =
+                                    require(Z3_mk_string_symbol(z3_ctx, name_cstr.as_ptr()))?;
+                                let range = require(Z3_mk_bv_sort(z3_ctx, *width))?;
+                                let domain: Vec<_> = children
+                                    .iter()
+                                    .map(|c| require(Z3_get_sort(z3_ctx, **c)))
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                let decl = require(Z3_mk_func_decl(
+                                    z3_ctx,
+                                    sym,
+                                    domain.len() as u32,
+                                    domain.as_ptr(),
+                                    range,
+                                ))?;
+                                let args: Vec<_> = children.iter().map(|c| **c).collect();
+                                RcAst::try_from(Z3_mk_app(
+                                    z3_ctx,
+                                    decl,
+                                    args.len() as u32,
+                                    args.as_ptr(),
+                                ))?
+                            }
                         })
                         .and_then(|converted| {
                             check_z3_error()?;
@@ -1011,23 +1041,55 @@ impl<'c> AstExtZ3<'c> for AstRef<'c> {
                         DeclKind::Uninterpreted => {
                             let sort = require(Z3_get_sort(z3_ctx, *ast))?;
                             let sym = require(Z3_get_decl_name(z3_ctx, decl))?;
+                            // Owned on purpose: Z3_get_symbol_string returns a
+                            // pointer into a Z3-internal buffer that the next
+                            // Z3 call overwrites, and converting the arguments
+                            // below makes many such calls.
                             let name = CStr::from_ptr(Z3_get_symbol_string(z3_ctx, sym))
                                 .to_str()
-                                .unwrap();
-                            match Z3_get_sort_kind(z3_ctx, sort) {
-                                SortKind::Bool => ctx.bools(name),
-                                SortKind::Bv => ctx.bvs(name, Z3_get_bv_sort_size(z3_ctx, sort)),
-                                SortKind::FloatingPoint => {
-                                    let fsort = FSort::new(
-                                        Z3_fpa_get_ebits(z3_ctx, sort),
-                                        Z3_fpa_get_sbits(z3_ctx, sort) - 1,
-                                    );
-                                    ctx.fps(name, fsort)
+                                .unwrap()
+                                .to_owned();
+                            // Arity distinguishes an uninterpreted CONSTANT (a
+                            // plain symbol) from an uninterpreted APPLICATION.
+                            // Treating an application as a constant would drop
+                            // its arguments, so two calls with different
+                            // arguments would collapse to the same symbol --
+                            // silently, and with a wrong answer.
+                            let num_args = Z3_get_app_num_args(z3_ctx, app);
+                            if num_args > 0 {
+                                let mut args = Vec::with_capacity(num_args as usize);
+                                for i in 0..num_args {
+                                    args.push(AstRef::from_z3(ctx, arg(i)?)?);
                                 }
-                                SortKind::Seq => ctx.strings(name),
-                                _ => Err(ClarirsError::ConversionError(
-                                    "uninterpreted constant has unsupported sort".to_string(),
-                                )),
+                                match Z3_get_sort_kind(z3_ctx, sort) {
+                                    SortKind::Bv => ctx.uninterpreted(
+                                        name,
+                                        args,
+                                        Z3_get_bv_sort_size(z3_ctx, sort),
+                                    ),
+                                    _ => Err(ClarirsError::ConversionError(
+                                        "uninterpreted application must return a bitvector"
+                                            .to_string(),
+                                    )),
+                                }
+                            } else {
+                                match Z3_get_sort_kind(z3_ctx, sort) {
+                                    SortKind::Bool => ctx.bools(name),
+                                    SortKind::Bv => {
+                                        ctx.bvs(name, Z3_get_bv_sort_size(z3_ctx, sort))
+                                    }
+                                    SortKind::FloatingPoint => {
+                                        let fsort = FSort::new(
+                                            Z3_fpa_get_ebits(z3_ctx, sort),
+                                            Z3_fpa_get_sbits(z3_ctx, sort) - 1,
+                                        );
+                                        ctx.fps(name, fsort)
+                                    }
+                                    SortKind::Seq => ctx.strings(name),
+                                    _ => Err(ClarirsError::ConversionError(
+                                        "uninterpreted constant has unsupported sort".to_string(),
+                                    )),
+                                }
                             }
                         }
                         _ => {

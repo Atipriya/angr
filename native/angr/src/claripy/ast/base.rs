@@ -291,6 +291,26 @@ impl Base {
         self.inner.depth() == 1
     }
 
+    /// Rebuild this node with `children` in place of its own AST children.
+    ///
+    /// The operation and every non-child field are kept -- Extract's bounds, an
+    /// uninterpreted application's name and width, a float op's rounding mode --
+    /// so callers cannot drop them by accident. A leaf has no children and is
+    /// returned unchanged. This is the generic rebuild that claripy's
+    /// `make_like` provided; there is no way to express it through the
+    /// per-operation constructors, which reject most op strings.
+    pub fn with_children<'py>(
+        &self,
+        py: Python<'py>,
+        children: Vec<Bound<'py, Base>>,
+    ) -> Result<Bound<'py, Base>, ClaripyError> {
+        let kids: Vec<_> = children.iter().map(|c| c.get().inner.clone()).collect();
+        match self.inner.op().with_children(&kids) {
+            Some(op) => Base::from_ast(py, GLOBAL_CONTEXT.make_ast(op)?),
+            None => Base::from_ast(py, self.inner.clone()),
+        }
+    }
+
     #[pyo3(signature = (respect_annotations=true))]
     pub fn simplify<'py>(
         &self,

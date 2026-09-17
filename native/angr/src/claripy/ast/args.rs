@@ -47,7 +47,11 @@ impl ExtractPyArgs for AstRef<'static> {
             | AstOp::Xor(args)
             | AstOp::Add(args)
             | AstOp::Mul(args)
-            | AstOp::Concat(args) => args
+            | AstOp::Concat(args)
+            // .args holds the real arguments only; the function name is the op
+            // string, never a child (unlike the old Python Func, which smuggled
+            // the name through args[0] and then stripped it back out in place).
+            | AstOp::Uninterpreted(_, args, _) => args
                 .iter()
                 .map(|a| wrap_child(py, a))
                 .collect::<Result<Vec<_>, _>>()?,

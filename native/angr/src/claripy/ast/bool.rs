@@ -289,8 +289,13 @@ pub fn BoolS<'py>(
 ) -> Result<Bound<'py, Bool>, ClaripyError> {
     let mut name: String = name.into();
     if !explicit_name {
-        let counter = BOOLS_COUNTER.fetch_add(1, Ordering::Relaxed);
-        name = format!("{name}_{counter}");
+        // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
+        // process and the counter is global with no reset between them, so the
+        // same register would be named differently on each side and textually
+        // identical constraints would never compare equal. Mirrors the claripy
+        // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
+        // within a side too.
+        let _ = &BOOLS_COUNTER;
     }
     Bool::new_with_name(py, &GLOBAL_CONTEXT.bools(&name)?, Some(name.clone()))
 }

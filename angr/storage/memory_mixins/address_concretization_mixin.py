@@ -19,6 +19,17 @@ def _multiwrite_filter(mem, ast: claripy.ast.Base):  # pylint:disable=unused-arg
     return ast.has_annotation_type(MultiwriteAnnotation)
 
 
+def _is_uninterpreted_addr(addr) -> bool:
+    """True for VeriBin's Func_*/MemoryLoad stand-ins, which are not real addresses.
+
+    Uses getattr because addr is not always an AST on this path: a RegisterOffset
+    also reaches it and has no .op, which previously raised AttributeError and
+    failed every function in the run.
+    """
+    op = getattr(addr, "op", None)
+    return isinstance(op, str) and (op == "MemoryLoad" or op.startswith("Func_"))
+
+
 SimStateOptions.register_option(
     "symbolic_ip_max_targets",
     int,
@@ -289,6 +300,16 @@ class AddressConcretizationMixin(MemoryMixin):
             and options.CONSERVATIVE_READ_STRATEGY in self.state.options
         ):
             return self._default_value(addr, size, name="symbolic_read_unconstrained", **kwargs)
+
+        # VeriBin: a Func_*/MemoryLoad address is an uninterpreted stand-in, not
+        # a real address, so it must never be concretized. Return whatever a
+        # matching symbolic write recorded, else a fresh MemoryLoad(addr) so
+        # repeated reads of the same address agree with each other.
+        if hasattr(self.state, "sypy_path") and _is_uninterpreted_addr(addr):
+            key = (addr, size)
+            if key in self.state.sypy_path.memory_writes:
+                return self.state.sypy_path.memory_writes[key]
+            return claripy.Uninterpreted("MemoryLoad", [addr], size * 8)
 
         try:
             concrete_addrs = self._interleave_ints(sorted(self.concretize_read_addr(addr, condition=condition)))
