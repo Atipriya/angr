@@ -619,5 +619,8 @@ impl Base {
 
 pub(crate) fn import(_: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Base>()?;
+    // Also registered on the root claripy module. Both, like Base: the class
+    // declares this module in its #[pyclass], so it has to exist here.
+    m.add_class::<veribin::ASTCacheKey>()?;
     Ok(())
 }

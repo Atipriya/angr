@@ -8,7 +8,7 @@ from .annotation import (
     StridedIntervalAnnotation,
     UninitializedAnnotation,
 )
-from .ast.base import Base
+from .ast.base import ASTCacheKey, Base
 from .ast.bits import Bits
 from .ast.bool import (
     And,
@@ -39,6 +39,7 @@ from .ast.bv import (
     UGT,
     ULE,
     ULT,
+    Uninterpreted,
     VS,
     Add,
     AShR,
@@ -139,6 +140,7 @@ def is_true(expr: object) -> bool: ...
 def is_false(expr: object) -> bool: ...
 
 __all__ = [
+    "ASTCacheKey",
     "BV",
     "BVS",
     "BVV",
@@ -157,6 +159,7 @@ __all__ = [
     "UGT",
     "ULE",
     "ULT",
+    "Uninterpreted",
     "VS",
     "AShR",
     "Add",
