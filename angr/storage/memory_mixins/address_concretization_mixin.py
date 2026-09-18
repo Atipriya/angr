@@ -26,11 +26,9 @@ def _multiwrite_filter(mem, ast: claripy.ast.Base):  # pylint:disable=unused-arg
 
 
 def _is_uninterpreted_addr(addr) -> bool:
-    """True for VeriBin's Func_*/MemoryLoad stand-ins, which are not real addresses.
+    """True for VeriBin's Func_/MemoryLoad values, which are not real addresses.
 
-    Uses getattr because addr is not always an AST on this path: a RegisterOffset
-    also reaches it and has no .op, which previously raised AttributeError and
-    failed every function in the run.
+    getattr because this path also sees a RegisterOffset, which has no .op.
     """
     op = getattr(addr, "op", None)
     return isinstance(op, str) and (op == "MemoryLoad" or op.startswith("Func_"))
@@ -301,24 +299,15 @@ class AddressConcretizationMixin(MemoryMixin):
         if options.AVOID_MULTIVALUED_READS in self.state.options:
             return self._default_value(addr, size, name="symbolic_read_unconstrained", **kwargs)
 
-        # VeriBin: rather than concretize an address, return an uninterpreted
-        # MemoryLoad(addr), so that two reads of the same address agree and
-        # reads of different addresses do not. Three cases qualify:
+        # VeriBin: return MemoryLoad(addr) rather than choose a concrete
+        # address, so reads of one address agree and reads of different ones do
+        # not. Applies to a Func_/MemoryLoad value, an address fixed to a single
+        # value, and one with over 32 values. A recorded write to the same
+        # address wins over a fresh read.
         #
-        #   * a Func_*/MemoryLoad stand-in, which is not an address at all;
-        #   * an address the constraints pin to a single value -- eval_atleast
-        #     finds fewer than two solutions;
-        #   * one loose enough to have more than 32 -- an unresolved indirect
-        #     target, which concretization would have to guess at.
-        #
-        # A recorded write to the same address wins over a fresh load, so a read
-        # after a write returns what was written.
-        #
-        # This has to run BEFORE the CONSERVATIVE_READ_STRATEGY check below,
-        # which VeriBin enables: that check returns a fresh unconstrained value
-        # for any address whose variables are not in the solver, and a
-        # register-derived address usually is not, so it would otherwise shadow
-        # this entirely.
+        # This must run before the CONSERVATIVE_READ_STRATEGY check below, which
+        # VeriBin enables and which would otherwise return a fresh unknown value
+        # for most of these addresses.
         if hasattr(self.state, "sypy_path"):
             try:
                 if _is_uninterpreted_addr(addr):
@@ -326,11 +315,10 @@ class AddressConcretizationMixin(MemoryMixin):
                 self.state.solver.eval_atleast(addr, 2)
                 self.state.solver.eval_atmost(addr, 32)
             except SimValueError:
-                # Keyed exactly as PathPlugin.handle_memory_write records it.
-                # A bare AST would not do: it hashes the same as its cache_key,
-                # so the dict lookup gets that far, but then compares with
-                # Base.__eq__, which builds a symbolic Bool rather than
-                # answering True or False.
+                # Same key PathPlugin.handle_memory_write uses. A bare
+                # expression will not work: it hashes the same, but then
+                # compares with Base.__eq__, which returns a symbolic Bool
+                # instead of True or False.
                 key = (addr.cache_key, size)
                 if key in self.state.sypy_path.memory_writes:
                     return self.state.sypy_path.memory_writes[key]

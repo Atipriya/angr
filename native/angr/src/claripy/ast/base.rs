@@ -294,12 +294,9 @@ impl Base {
 
     /// Rebuild this node with `children` in place of its own AST children.
     ///
-    /// The operation and every non-child field are kept -- Extract's bounds, an
-    /// uninterpreted application's name and width, a float op's rounding mode --
-    /// so callers cannot drop them by accident. A leaf has no children and is
-    /// returned unchanged. This is the generic rebuild that claripy's
-    /// `make_like` provided; there is no way to express it through the
-    /// per-operation constructors, which reject most op strings.
+    /// Keeps the operation and its other fields -- Extract's bounds, a
+    /// function's name and width, a float operation's rounding mode. A leaf
+    /// comes back unchanged.
     pub fn with_children<'py>(
         &self,
         py: Python<'py>,
@@ -314,8 +311,8 @@ impl Base {
 
     /// Each distinct leaf AST, once.
     ///
-    /// Restores claripy's `Base.leaf_asts`, which upstream removed. Dedup is by
-    /// structural hash, so a subexpression shared many times is yielded once.
+    /// Restores claripy's `Base.leaf_asts`, which angr removed. A leaf used
+    /// many times is returned once.
     pub fn leaf_asts<'py>(&self, py: Python<'py>) -> Result<Vec<Bound<'py, Base>>, ClaripyError> {
         let mut seen: HashSet<u64> = HashSet::new();
         let mut stack = vec![self.inner.clone()];
@@ -335,8 +332,8 @@ impl Base {
 
     /// Every descendant AST, leaves included.
     ///
-    /// Restores claripy's `Base.children_asts`. Not deduplicated, matching the
-    /// original: a shared subexpression appears once per edge into it.
+    /// Restores claripy's `Base.children_asts`. As in the original, a shared
+    /// subexpression appears once for each place it is used.
     pub fn children_asts<'py>(
         &self,
         py: Python<'py>,
@@ -352,26 +349,23 @@ impl Base {
 
     /// Hashable handle for this AST, as claripy's `cache_key` returned.
     ///
-    /// The node itself is already a sound dict key here, but VeriBin stores
-    /// cache keys and reads the AST back off them as `key.ast`.
+    /// The node works as a dictionary key on its own, but VeriBin stores
+    /// these and reads the expression back out as `key.ast`.
     #[getter]
     pub fn cache_key(&self) -> veribin::ASTCacheKey {
         veribin::ASTCacheKey::new(self.inner.clone())
     }
 
-    /// Hash that ignores variable names, the order of commutative operands and
-    /// the direction of reversible comparisons. VeriBin's cheap pre-filter
-    /// before asking z3. See `claripy::veribin`.
+    /// Hash that ignores variable names, operand order where it does not
+    /// matter, and the direction of a comparison. VeriBin uses it as a quick
+    /// check before calling the solver. See `claripy::veribin`.
     pub fn canonical_hash(&self) -> Result<u64, ClaripyError> {
         veribin::canonical_hash(&self.inner)
     }
 
-    /// Sort commutative operands, flip reversible comparisons, and (by default)
-    /// rename symbolic leaves, so two ASTs that differ only in those ways
-    /// compare equal as strings.
-    ///
-    /// Distinct from `canonicalize`, which angr uses and which returns a
-    /// 3-tuple and normalizes variable names only.
+    /// Sort operands where order does not matter, rewrite `a < b` as `b > a`,
+    /// and by default rename variables, so two expressions differing only in
+    /// those ways print the same. Not `canonicalize`, which only renames.
     #[pyo3(signature = (rename=true))]
     pub fn canonicalize_veribin<'py>(
         &self,
@@ -382,8 +376,8 @@ impl Base {
     }
 
     /// Rebuild this node as `op` over `args`, restoring claripy's `make_like`.
-    /// Handles leaf renames, same-op rebuilds and reversible-comparison flips;
-    /// anything else raises.
+    /// Handles renaming a variable, rebuilding the same operation over new
+    /// children, and flipping a comparison. Anything else raises.
     pub fn make_like<'py>(
         &self,
         py: Python<'py>,
@@ -619,8 +613,8 @@ impl Base {
 
 pub(crate) fn import(_: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Base>()?;
-    // Also registered on the root claripy module. Both, like Base: the class
-    // declares this module in its #[pyclass], so it has to exist here.
+    // Registered here as well as on the root module, like Base, because the
+    // class names this module in its #[pyclass].
     m.add_class::<veribin::ASTCacheKey>()?;
     Ok(())
 }

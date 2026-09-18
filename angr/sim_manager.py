@@ -514,15 +514,14 @@ class SimulationManager:
         try:
             successors = self.successors(state, successor_func=successor_func, **run_args)
 
-            # VeriBin: force loop break edges to execute. Once a loop has run at
-            # least twice, an unsat successor that is one of the loop's recorded
-            # break edges is moved from unsat_successors to flat_successors, so
-            # the path past the loop is explored instead of being dropped.
+            # VeriBin: once a loop has run twice, move any unsatisfiable
+            # successor that is one of its recorded exit edges back into the
+            # active list, so the path past the loop is explored.
             if hasattr(state, "sypy_path") and state.addr in state.sypy_path.breaking_addr_to_loop_addr:
                 loop_addr = state.sypy_path.breaking_addr_to_loop_addr[state.addr]
                 if list(state.history.bbl_addrs).count(loop_addr) > 1:
                     break_edges = state.sypy_path.loop_info[loop_addr]["break_edges"]
-                    # Collect first: unsat_successors cannot be mutated while iterating it.
+                    # Collect first; the list cannot be changed while iterating.
                     to_move = [s for s in successors.unsat_successors if s.addr in break_edges[state.addr]]
                     for successor in to_move:
                         successors.unsat_successors.remove(successor)

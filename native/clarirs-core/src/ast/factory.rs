@@ -770,9 +770,8 @@ pub trait AstFactory<'c>: Sized {
         self.make_ast(AstOp::Widen(lhs.into_owned(), rhs.into_owned()))
     }
 
-    /// An uninterpreted function application: `name` applied to `args`, giving
-    /// a bitvector `width` bits wide. Zero arguments is legal -- it denotes an
-    /// opaque value rather than a variable.
+    /// `name` applied to `args`, giving a bitvector `width` bits wide. Zero
+    /// arguments is allowed and means an unknown value rather than a variable.
     fn uninterpreted<S: AsRef<str>>(
         &'c self,
         name: S,

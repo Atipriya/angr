@@ -1542,10 +1542,9 @@ pub(crate) fn simplify_bv<'c>(
             }
             Ok(ctx.widen(lhs, rhs)?)
         }
-        // Deliberately inert: simplify the arguments, never rewrite the
-        // application. This simplifier is shared with angr's own symbolic
-        // execution, so any rewrite rule added here would change angr
-        // everywhere, not just VeriBin. Interning already gives congruence.
+        // Simplify the arguments but never rewrite the call itself. This
+        // simplifier is shared with angr's symbolic execution, so a rule added
+        // here would change angr everywhere, not just VeriBin.
         AstOp::Uninterpreted(name, _, width) => {
             let args = state.get_all_simplified()?;
             Ok(ctx.uninterpreted(name.as_str(), args, *width)?)

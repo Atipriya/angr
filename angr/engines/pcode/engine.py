@@ -195,12 +195,9 @@ class HeavyPcodeMixin(
                     ret_reg = cc.RETURN_VAL
                     if isinstance(ret_reg, SimRegArg):
                         ret_offset = exit_state.arch.registers[ret_reg.reg_name][0]
-                        # VeriBin: with the sypy_path plugin present, a skipped call
-                        # returns an uninterpreted Func_<name>(args) rather than a fresh
-                        # unconstrained value, so two calls with the same arguments
-                        # agree and calls with different arguments do not. The VEX
-                        # engine does the same in engines/vex/heavy/heavy.py; this is
-                        # the pcode path, which is what non-VEX targets take.
+                        # VeriBin: a skipped call returns Func_<name>(args),
+                        # so two calls with the same arguments agree. The pcode
+                        # path of the same change in vex/heavy/heavy.py.
                         if hasattr(exit_state, "sypy_path"):
                             try:
                                 target_func_call_addr = exit_state.addr

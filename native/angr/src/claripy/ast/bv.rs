@@ -1076,12 +1076,11 @@ pub fn BVS(
 ) -> Result<Bound<'_, BV>, ClaripyError> {
     let mut name: String = name.into();
     if !explicit_name {
-        // VeriBin: no uniquifying counter. Both binaries are analysed in ONE
-        // process and the counter is global with no reset between them, so the
-        // same register would be named differently on each side and textually
-        // identical constraints would never compare equal. Mirrors the claripy
-        // patch 9d9f1927. Trade-off: symbols sharing name+size now collide
-        // within a side too.
+        // VeriBin: do not append a counter to the name. Both binaries are
+        // analysed in one process and the counter never resets, so the same
+        // register would get a different name on each side and identical
+        // expressions would never compare equal. The cost is that two symbols
+        // with the same name and size are now the same symbol.
         name = format!("{name}_{size}");
     }
     BV::new_with_name(py, &GLOBAL_CONTEXT.bvs(&name, size)?, Some(name))

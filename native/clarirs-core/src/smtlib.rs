@@ -40,16 +40,13 @@ fn sort_tag(ast: &AstRef<'_>) -> String {
     }
 }
 
-/// SMT-LIB symbol for an uninterpreted application, with its signature encoded.
+/// SMT-LIB name for an uninterpreted function, with its argument and result
+/// types appended.
 ///
-/// SMT-LIB permits one declaration per name. z3's API -- which pre-clarirs
-/// claripy used via `z3.Function(name, *sig)` -- instead treats each distinct
-/// signature as its own declaration that merely shares a display name, and
-/// shares no congruence between them. VeriBin depends on that: it truncates
-/// argument lists, so one callee legitimately appears at several arities.
-/// Encoding the signature keeps those separate, matching the old behaviour;
-/// applications that agree on the signature still collapse to one symbol, so
-/// congruence within a signature is preserved. The name stays a prefix, so
+/// SMT-LIB allows only one declaration per name, but VeriBin shortens argument
+/// lists, so the same function can appear with different argument counts.
+/// Appending the types keeps those apart. Calls that agree on types still share
+/// a name and so still compare equal. The original name stays at the front, so
 /// `startswith("Func_")` checks keep working.
 fn smtlib_uf_symbol(name: &str, args: &[AstRef<'_>], width: u32) -> String {
     let mut symbol = String::from(name);

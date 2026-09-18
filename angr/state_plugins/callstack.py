@@ -372,18 +372,10 @@ class CallStack(SimStatePlugin):
         except SimSolverError:
             concrete_addr = False
         if not concrete_addr:
-            # VeriBin: an indirect call through a symbolic -- or unsat -- target
-            # must still reach the 'call' breakpoint. That breakpoint is where
-            # PathPlugin.handle_indirect_function_call records the callee and its
-            # arguments into sypy_path.function_calls / function_info; the VEX
-            # engine then asserts the call was recorded. Returning early leaves
-            # both dicts empty and heavy.py dies with KeyError.
-            #
-            # The concreteness guard above is upstream's (4c2030682, "Add AIL
-            # symbolic execution"), added after the VeriBin fork point; before it
-            # the breakpoint fired unconditionally on Ijk_Call. Fire it here to
-            # restore that, without re-enabling the rest of callstack management,
-            # which does genuinely require a concrete address.
+            # VeriBin: a call through a symbolic target must still reach the
+            # 'call' breakpoint, which records the callee and its arguments;
+            # without them the VEX engine fails with KeyError. The check above
+            # was added upstream (4c2030682) after VeriBin forked.
             if self.state.history.jumpkind == "Ijk_Call":
                 self.state._inspect("call", BP_BEFORE, function_address=self.state.regs._ip)
                 self.state._inspect("call", BP_AFTER)

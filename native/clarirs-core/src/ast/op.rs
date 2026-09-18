@@ -106,12 +106,12 @@ pub enum AstOp<'c> {
     StrIndexOf(AstRef<'c>, AstRef<'c>, AstRef<'c>),
     StrToBV(AstRef<'c>),
 
-    /// An uninterpreted function application: a named function symbol applied to
-    /// `args`, producing a bitvector of the given width. Opaque to the solver
-    /// except for congruence -- equal arguments give equal results. VeriBin uses
-    /// these for call results (`Func_<name>`) and for memory reads whose address
-    /// cannot be concretized (`MemoryLoad`). Always symbolic: a zero-argument
-    /// application has no variables but is still not a known value.
+    /// A named function applied to `args`, returning a bitvector `width` bits
+    /// wide. The solver knows nothing about the function except that the same
+    /// arguments always give the same result. VeriBin uses it for the result of
+    /// a call it skipped (`Func_<name>`) and for a memory read at an address it
+    /// could not pin down (`MemoryLoad`). Always counts as symbolic, even with
+    /// no arguments.
     Uninterpreted(InternedString, Vec<AstRef<'c>>, u32),
 
     // VSA bitvector operations (always symbolic)

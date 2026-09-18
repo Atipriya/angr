@@ -524,15 +524,13 @@ impl<'c> AstExtZ3<'c> for AstRef<'c> {
                                 RcAst::try_from(Z3_mk_int_to_str(z3_ctx, *int_val))?
                             }
 
-                            // Uninterpreted application. Z3 interns func_decls
-                            // by name and signature, so every application of
-                            // the same symbol shares one declaration and Z3's
-                            // congruence closure gives equal results for equal
-                            // arguments -- which is the whole point of the op.
+                            // Z3 stores one declaration per name and
+                            // signature, so every call of the same function
+                            // shares it and Z3 gives equal results for equal
+                            // arguments, which is the point of the op.
                             AstOp::Uninterpreted(name, _, width) => {
                                 let name_cstr = std::ffi::CString::new(name.as_str()).unwrap();
-                                let sym =
-                                    require(Z3_mk_string_symbol(z3_ctx, name_cstr.as_ptr()))?;
+                                let sym = require(Z3_mk_string_symbol(z3_ctx, name_cstr.as_ptr()))?;
                                 let range = require(Z3_mk_bv_sort(z3_ctx, *width))?;
                                 let domain: Vec<_> = children
                                     .iter()
@@ -1041,20 +1039,17 @@ impl<'c> AstExtZ3<'c> for AstRef<'c> {
                         DeclKind::Uninterpreted => {
                             let sort = require(Z3_get_sort(z3_ctx, *ast))?;
                             let sym = require(Z3_get_decl_name(z3_ctx, decl))?;
-                            // Owned on purpose: Z3_get_symbol_string returns a
-                            // pointer into a Z3-internal buffer that the next
-                            // Z3 call overwrites, and converting the arguments
-                            // below makes many such calls.
+                            // Copy the name now: Z3_get_symbol_string points
+                            // into a buffer the next Z3 call overwrites, and
+                            // converting the arguments below makes many calls.
                             let name = CStr::from_ptr(Z3_get_symbol_string(z3_ctx, sym))
                                 .to_str()
                                 .unwrap()
                                 .to_owned();
-                            // Arity distinguishes an uninterpreted CONSTANT (a
-                            // plain symbol) from an uninterpreted APPLICATION.
-                            // Treating an application as a constant would drop
-                            // its arguments, so two calls with different
-                            // arguments would collapse to the same symbol --
-                            // silently, and with a wrong answer.
+                            // The argument count tells a plain symbol apart
+                            // from a function call. Reading a call as a symbol
+                            // would drop its arguments, so two calls with
+                            // different arguments would silently become one.
                             let num_args = Z3_get_app_num_args(z3_ctx, app);
                             if num_args > 0 {
                                 let mut args = Vec::with_capacity(num_args as usize);

@@ -193,10 +193,9 @@ class HeavyVEXMixin(SuccessorsEngine, ClaripyDataMixin, SimStateStorageMixin, VE
             exit_jumpkind = exit_state.history.jumpkind or ""
 
             if o.CALLLESS in self.state.options and exit_jumpkind == "Ijk_Call":
-                # VeriBin: with the sypy_path plugin present, a skipped call
-                # returns an uninterpreted Func_<name>(args) rather than a fresh
-                # unconstrained value, so two calls with the same arguments
-                # agree and calls with different arguments do not.
+                # VeriBin: a skipped call returns Func_<name>(args) rather
+                # than a fresh unknown value, so two calls with the same
+                # arguments agree and calls with different ones do not.
                 if hasattr(exit_state, "sypy_path"):
                     try:
                         target_func_call_addr = exit_state.addr
